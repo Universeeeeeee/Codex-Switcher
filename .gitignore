@@ -1,0 +1,7 @@
+dist/
+*.app/
+.DS_Store
+providers.json
+auth/
+logs/
+backups/

@@ -1,0 +1,39 @@
+{
+  "providerId": "main",
+  "officialBaseUrl": "https://chatgpt.com/backend-api/codex",
+  "proxy": "http://127.0.0.1:7897",
+
+  "providers": [
+    {
+      "id": "official",
+      "name": "邮箱登录（官方）",
+      "desc": "ChatGPT 官方账号；模型请求走 chatgpt.com/backend-api/codex",
+      "mode": "chatgpt",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "authFile": "~/.codex-switcher/auth/official.json"
+    },
+    {
+      "id": "relay-a",
+      "name": "中继 A（示例）",
+      "desc": "任何兼容 OpenAI Responses 的中继；无 ChatGPT 登录也能用",
+      "mode": "apikey",
+      "model": "gpt-6-astra",
+      "effort": "high",
+      "baseUrl": "https://your-relay.example.com",
+      "wireApi": "responses",
+      "apiKey": "sk-REPLACE_ME"
+    },
+    {
+      "id": "relay-b",
+      "name": "中继 B（局域网，示例）",
+      "desc": "局域网/内网中继，注意只在对应网络下可用",
+      "mode": "apikey",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "baseUrl": "http://192.168.1.100:8081/v1",
+      "wireApi": "responses",
+      "apiKey": "sk-REPLACE_ME"
+    }
+  ]
+}
