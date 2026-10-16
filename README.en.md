@@ -4,7 +4,7 @@
 
 macOS · one bash script + a ~250 KB native window · no gateway, no daemon · MIT
 
-[中文说明](README.md)
+[中文说明](README.md) · [Why](#why-pick-it-three-reasons) · [Comparison](#comparison-magpie--cc-switch--this-project) · [Install](#install)
 
 ![Codex Switcher window](docs/images/app-window.png)
 
@@ -22,6 +22,35 @@ macOS · one bash script + a ~250 KB native window · no gateway, no daemon · M
 ▶ 7/9 端到端验证
   ✅ 真实请求成功（模型回复 OK）—— 该通道当前可用
 ```
+
+---
+
+## Why pick it: three reasons
+
+1. **It fixes bucketing today.** magpie's plan is broader but still an open issue; cc-switch doesn't touch it. Here the provider id is fixed, plus an optional **one-time** history migration (`threads.model_provider` and `model_provider` / `model_provider_id` inside session files — including easily-missed files like `….jsonl_副本`).
+2. **Zero always-on dependency.** No gateway, no daemon, no port. magpie is far more capable, but it must keep running — quit it and the agent loses its provider.
+3. **It proves the switch worked, and repairs broken configs.** Each switch fires one real request through Codex's own CLI (`--ephemeral`, no session written); upstream quota exhaustion surfaces as `DAILY_LIMIT_EXCEEDED` instead of a silent failure. Every run also asserts that the `[model_providers.*]` table referenced by `model_provider` exists — the exact cause of `Model provider not found`.
+
+## Comparison: magpie / cc-switch / this project
+
+| | **Codex Switcher** | [cc-switch](https://github.com/farion1231/cc-switch) | [magpie](https://github.com/yetone/magpie) |
+|---|---|---|---|
+| Scope | One job: switch Codex upstreams without splitting history | Provider config switcher for several CLIs | Model/provider/account manager for every agent |
+| UI | Small native window | GUI | Menu bar + window + TUI + CLI |
+| **History bucketing** | ✅ **never** (fixed provider id) | ❌ other bucket disappears¹ | ⚠️ splits into `openai` / `magpie` buckets; #994 accepted, **not shipped as of 2026-10-16** |
+| Keeps ChatGPT sign-in | ✅ also on relays (apikey mode optional) | configurable | ✅ never touches it |
+| **Verifies the switch actually works** | ✅ sends a real request every time (`codex exec --ephemeral`, nothing written) | ❌ | ⚠️ gateway health only, not Codex end-to-end |
+| Repairs a half-written config | ✅ checks/rewrites the `[model_providers.*]` table on every run | ❌ | ✅ documented |
+| Runtime dependency | **none** — Codex talks straight to the upstream | GUI app | **local gateway must stay running** (127.0.0.1:3425) |
+| Size / auditable | ~450 lines bash + ~250 lines Swift, plain text | GUI | large project (plugins, routing, …) |
+
+¹ Measured on macOS with the Codex desktop app: after switching providers with cc-switch, Codex's thread bucket labels did not follow, so only the bucket matching the new provider stayed visible (1 of 647 threads in our case). cc-switch manages `config.toml` / `auth.json`; thread labels are outside its scope.
+
+### When to use something else
+
+- Multi-agent, multi-account, quota-aware failover, models in Codex's own picker → **magpie**.
+- Mostly Claude Code config switching → **cc-switch**.
+- "Just don't scramble my Codex history" → this.
 
 ---
 
@@ -56,37 +85,6 @@ experimental_bearer_token = "…"    # relays only
 With `requires_openai_auth = true` the app stays signed in to ChatGPT (many app features need it) while model requests carry the relay key to `base_url`. This is the "bound OAuth" shape discussed in [yetone/magpie#994](https://github.com/yetone/magpie/issues/994); this repo makes it a ready-to-use tool.
 
 Because the provider id never changes, Codex's thread list is one list forever — no per-switch migration, no second bucket.
-
-## Comparison: magpie / cc-switch / this project
-
-| | **Codex Switcher** | [cc-switch](https://github.com/farion1231/cc-switch) | [magpie](https://github.com/yetone/magpie) |
-|---|---|---|---|
-| Scope | One job: switch Codex upstreams without splitting history | Provider config switcher for several CLIs | Model/provider/account manager for every agent |
-| UI | Small native window | GUI | Menu bar + window + TUI + CLI |
-| **History bucketing** | ✅ **never** (fixed provider id) | ❌ other bucket disappears¹ | ⚠️ splits into `openai` / `magpie` buckets; #994 accepted, **not shipped as of 2026-10-16** |
-| Keeps ChatGPT sign-in | ✅ also on relays (apikey mode optional) | configurable | ✅ never touches it |
-| **Verifies the switch actually works** | ✅ sends a real request every time (`codex exec --ephemeral`, nothing written) | ❌ | ⚠️ gateway health only, not Codex end-to-end |
-| Repairs a half-written config | ✅ checks/rewrites the `[model_providers.*]` table on every run | ❌ | ✅ documented |
-| Runtime dependency | **none** — Codex talks straight to the upstream | GUI app | **local gateway must stay running** (127.0.0.1:3425) |
-| Size / auditable | ~450 lines bash + ~250 lines Swift, plain text | GUI | large project (plugins, routing, …) |
-| Quota-aware failover | ❌ | ❌ | ✅✅ |
-| Injects models into Codex's own picker | ❌ | ❌ | ✅ (`model_catalog_json`) |
-| Agents / platforms | Codex / macOS | several / macOS·Win·Linux | 60+ / macOS·Win·Linux·Docker |
-| Maintenance | personal tool, no promise | active | very active |
-
-¹ Measured on macOS with the Codex desktop app: after switching providers with cc-switch, Codex's thread bucket labels did not follow, so only the bucket matching the new provider stayed visible (1 of 647 threads in our case). cc-switch manages `config.toml` / `auth.json`; thread labels are outside its scope.
-
-### Our three advantages
-
-1. **It fixes bucketing today.** magpie's plan is broader but still an open issue; cc-switch doesn't touch it. Here the provider id is fixed, plus an optional **one-time** history migration (`threads.model_provider` and `model_provider` / `model_provider_id` inside session files — including easily-missed files like `….jsonl_副本`).
-2. **Zero always-on dependency.** No gateway, no daemon, no port. magpie is far more capable, but it must keep running — quit it and the agent loses its provider.
-3. **It proves the switch worked, and repairs broken configs.** Each switch fires one real request through Codex's own CLI (`--ephemeral`, no session written); upstream quota exhaustion surfaces as `DAILY_LIMIT_EXCEEDED` instead of a silent failure. Every run also asserts that the `[model_providers.*]` table referenced by `model_provider` exists — the exact cause of `Model provider not found`.
-
-### When to use something else
-
-- Multi-agent, multi-account, quota-aware failover, models in Codex's own picker → **magpie**.
-- Mostly Claude Code config switching → **cc-switch**.
-- "Just don't scramble my Codex history" → this.
 
 ## Install
 

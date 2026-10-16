@@ -2,7 +2,7 @@
 
 > 在 Codex 里一键切换上游（官方 / 各种中继），**但 provider id 永不变 —— 会话历史永远在同一个列表里。**
 
-[English](README.en.md) · [它解决的问题](#它解决的问题) · [与 magpie / cc-switch 对比](#与-magpie--cc-switch-对比) · [安装](#安装)
+[English](README.en.md) · [三条优势](#为什么选它三条) · [与 magpie / cc-switch 对比](#与-magpie--cc-switch-对比) · [安装](#安装)
 
 macOS · 一个 bash 脚本 + 一个 250 KB 的原生小窗口 · 无网关、无常驻服务 · MIT
 
@@ -22,6 +22,35 @@ macOS · 一个 bash 脚本 + 一个 250 KB 的原生小窗口 · 无网关、�
 ▶ 7/9 端到端验证
   ✅ 真实请求成功（模型回复 OK）—— 该通道当前可用
 ```
+
+---
+
+## 为什么选它：三条
+
+1. **分桶问题今天就能解决。** magpie 的方案更完整但还在 issue 阶段；cc-switch 不处理这件事。本项目用「固定 provider id」从源头消除分桶——而且必要时提供**一次性**历史迁移（`threads.model_provider` + 会话文件里的 `model_provider` / `model_provider_id` 一起改，含 `….jsonl_副本` 这类容易漏掉的文件）。
+2. **零常驻依赖。** Codex 直接连官方后端或你的中继，中间没有网关、没有守护进程、没有端口。magpie 很强大，但它要求网关常驻——magpie 一退出，Agent 就失去 provider。
+3. **切换即自证，坏了会自修。** 每次切换后真的发一条请求（用 Codex 自带的 CLI，`--ephemeral` 不写会话文件），上游额度耗尽会明确报 `DAILY_LIMIT_EXCEEDED` 而不是静默失败；同时每次运行都检查 `model_provider` 指向的 `[model_providers.*]` 表是否存在——这正是 Codex 报 `Model provider not found` 的原因。
+
+## 与 magpie / cc-switch 对比
+
+| | **Codex Switcher**（本项目） | [cc-switch](https://github.com/farion1231/cc-switch) | [magpie](https://github.com/yetone/magpie) |
+|---|---|---|---|
+| 定位 | 只干一件事：Codex 换上游但历史不分桶 | 多 CLI 的供应商配置切换（GUI） | 所有 Agent 的模型 / 供应商 / 账号统一管理 |
+| 界面 | 原生小窗口（3 个按钮） | GUI | 菜单栏 + 窗口 + TUI + CLI |
+| **会话历史是否分桶** | ✅ **永不**（provider id 固定） | ❌ 切换后另一个桶的会话看不到¹ | ⚠️ 目前会分成 `openai` / `magpie` 两个桶，#994 已决定实现，**截至 2026-10-16 未发布** |
+| 保留 ChatGPT 登录 | ✅ 中继通道也保留（可选退回 apikey） | 可配置保留 | ✅ 明确「不触碰登录」 |
+| 切换后是否验证真的可用 | ✅ **每次都真发一次请求**（`codex exec --ephemeral`，不落盘） | ❌ 无 | ⚠️ 有网关侧健康检查，不校验 Codex 端到端 |
+| 配置被改坏时自修复 | ✅ 每次运行检测 `model_provider` 指向的表是否存在，缺失即补 | ❌ | ✅ 文档明确会补回 |
+| 运行依赖 | **无**（Codex 直连上游） | GUI 应用 | **本地网关常驻** 127.0.0.1:3425，magpie 退出后 Agent 就失去 provider |
+| 体量 / 可审计 | ~450 行 bash + ~250 行 Swift，纯文本 | GUI | 大型项目（多语言、插件、路由） |
+
+¹ 我们在 macOS + Codex 桌面端上的实测：用 cc-switch 切换供应商后，Codex 侧的历史桶标签没有跟着变，于是侧边栏只剩下与新 provider 匹配的那一个桶（我们那次是 647 条里只看得到 1 条）。cc-switch 的定位是管理 `config.toml` / `auth.json`，会话标签不在它的职责范围内。
+
+### 什么时候该用别的
+
+- 你要**多 Agent、多账号、额度用尽自动换号**、想让中继模型出现在 Codex 自带模型列表里 → 用 **magpie**，它比本项目强得多。
+- 你主要切 Claude Code 的配置 → 用 **cc-switch**。
+- 你只关心「Codex 换上游时历史别乱」 → 本项目。
 
 ---
 
@@ -58,39 +87,6 @@ experimental_bearer_token = "…"    # 仅中继通道有
 `requires_openai_auth = true` 让 Codex 一直用 `auth.json` 里的 ChatGPT 登录（App 里很多功能依赖登录态），而模型请求带中继 key 发往 `base_url`。这个写法与 [yetone/magpie#994](https://github.com/yetone/magpie/issues/994) 讨论的「绑定 OAuth」一致，本仓库把它做成了一个开箱可用的工具。
 
 因为 provider id 从不变，**Codex 的会话列表自始至终是同一个**：不需要每次切换后补迁移，也不会再有第二个桶。
-
-## 与 magpie / cc-switch 对比
-
-| | **Codex Switcher**（本项目） | [cc-switch](https://github.com/farion1231/cc-switch) | [magpie](https://github.com/yetone/magpie) |
-|---|---|---|---|
-| 定位 | 只干一件事：Codex 换上游但历史不分桶 | 多 CLI 的供应商配置切换（GUI） | 所有 Agent 的模型 / 供应商 / 账号统一管理 |
-| 界面 | 原生小窗口（3 个按钮） | GUI | 菜单栏 + 窗口 + TUI + CLI |
-| **会话历史是否分桶** | ✅ **永不**（provider id 固定） | ❌ 切换后另一个桶的会话看不到¹ | ⚠️ 目前会分成 `openai` / `magpie` 两个桶，#994 已决定实现，**截至 2026-10-16 未发布** |
-| 保留 ChatGPT 登录 | ✅ 中继通道也保留（可选退回 apikey） | 可配置保留 | ✅ 明确「不触碰登录」 |
-| 切换后是否验证真的可用 | ✅ **每次都真发一次请求**（`codex exec --ephemeral`，不落盘） | ❌ 无 | ⚠️ 有网关侧健康检查，不校验 Codex 端到端 |
-| 配置被改坏时自修复 | ✅ 每次运行检测 `model_provider` 指向的表是否存在，缺失即补 | ❌ | ✅ 文档明确会补回 |
-| 运行依赖 | **无**（Codex 直连上游） | GUI 应用 | **本地网关常驻** 127.0.0.1:3425，magpie 退出后 Agent 就失去 provider |
-| 体量 / 可审计 | ~450 行 bash + ~250 行 Swift，纯文本 | GUI | 大型项目（多语言、插件、路由） |
-| 多上游 / 多通道 | ✅ JSON 里加一条 | ✅ | ✅✅ |
-| 额度耗尽自动切换（路由组） | ❌ | ❌ | ✅✅ |
-| 让中继模型出现在 Codex 自带模型列表 | ❌ | ❌ | ✅（`model_catalog_json` 注入） |
-| 支持的 Agent | 仅 Codex | 多个 | 60+ |
-| 平台 | macOS | macOS / Windows / Linux | macOS / Windows / Linux / Docker |
-| 维护 | 个人工具，无维护承诺 | 活跃 | 非常活跃（一天多个版本） |
-
-¹ 我们在 macOS + Codex 桌面端上的实测：用 cc-switch 切换供应商后，Codex 侧的历史桶标签没有跟着变，于是侧边栏只剩下与新 provider 匹配的那一个桶（我们那次是 647 条里只看得到 1 条）。cc-switch 的定位是管理 `config.toml` / `auth.json`，会话标签不在它的职责范围内。
-
-### 我们的突出优势，就三条
-
-1. **分桶问题今天就能解决。** magpie 的方案更完整但还在 issue 阶段；cc-switch 不处理这件事。本项目用「固定 provider id」从源头消除分桶——而且必要时提供**一次性**历史迁移（`threads.model_provider` + 会话文件里的 `model_provider` / `model_provider_id` 一起改，含 `….jsonl_副本` 这类容易漏掉的文件）。
-2. **零常驻依赖。** Codex 直接连官方后端或你的中继，中间没有网关、没有守护进程、没有端口。magpie 很强大，但它要求网关常驻——magpie 一退出，Agent 就失去 provider。
-3. **切换即自证，坏了会自修。** 每次切换后真的发一条请求（用 Codex 自带的 CLI，`--ephemeral` 不写会话文件），上游额度耗尽会明确报 `DAILY_LIMIT_EXCEEDED` 而不是静默失败；同时每次运行都检查 `model_provider` 指向的 `[model_providers.*]` 表是否存在——这正是 Codex 报 `Model provider not found` 的原因。
-
-### 什么时候该用别的
-
-- 你要**多 Agent、多账号、额度用尽自动换号**、想让中继模型出现在 Codex 自带模型列表里 → 用 **magpie**，它比本项目强得多。
-- 你主要切 Claude Code 的配置 → 用 **cc-switch**。
-- 你只关心「Codex 换上游时历史别乱」 → 本项目。
 
 ## 安装
 
@@ -188,10 +184,6 @@ open /Applications/CodexSwitcher.app
 - **不会把中继的模型注入 Codex 自带模型列表**（那是 magpie 的 `model_catalog_json` 做的事）。所以别在 Codex 的模型选择器里点具体模型——模型由本工具的 `providers.json` 按通道设置
 - 官方后端地址 `https://chatgpt.com/backend-api/codex` 是从 CLI 二进制里取出来的，属于未公开接口，Codex 升级后可能变化
 - 个人工具，无维护承诺；Codex 的配置格式变化需要跟（例如 `disable_response_storage` 在新版已被判为 unrecognized，本脚本会自动清理）
-
-## 与 magpie #994 的关系
-
-magpie 是更完整的方案，本项目只解决其中一个点。如果你在 magpie 的 issue 里看到这段思路，那正是本仓库在做的事；magpie 实现该能力后，需要多 Agent / 额度路由的用户应当直接用 magpie。
 
 ## 致谢
 
