@@ -6,6 +6,23 @@
 
 macOS · 一个 bash 脚本 + 一个 250 KB 的原生小窗口 · 无网关、无常驻服务 · MIT
 
+![Codex Switcher 界面](docs/images/app-window.png)
+
+<sub>每次切换都会逐步骤输出（备份 → 凭据 → 配置 → 历史标签 → 真实请求验证 → 重启）：</sub>
+
+```text
+▶ 4/9 生成 config.toml
+  provider=main | model=gpt-6-astra | effort=high | 中继 https://<你的中继> | 保留 ChatGPT 登录
+  ✅ config.toml 已更新
+  ✅ 已确认 provider 段存在（不会再出现 'Model provider not found'）
+
+▶ 5/9 会话历史桶 -> main
+  ✅ 标签已一致（647 条），无需改写        ← 固定 id 之后，从第二次起就不用再改写
+
+▶ 7/9 端到端验证
+  ✅ 真实请求成功（模型回复 OK）—— 该通道当前可用
+```
+
 ---
 
 ## 它解决的问题

@@ -6,6 +6,23 @@ macOS · one bash script + a ~250 KB native window · no gateway, no daemon · M
 
 [中文说明](README.md)
 
+![Codex Switcher window](docs/images/app-window.png)
+
+<sub>Every switch prints its steps (backup → credentials → config → history labels → a real request → relaunch):</sub>
+
+```text
+▶ 4/9 生成 config.toml
+  provider=main | model=gpt-6-astra | effort=high | 中继 https://<your relay> | 保留 ChatGPT 登录
+  ✅ config.toml 已更新
+  ✅ 已确认 provider 段存在（不会再出现 'Model provider not found'）
+
+▶ 5/9 会话历史桶 -> main
+  ✅ 标签已一致（647 条），无需改写        ← with a fixed id, nothing to rewrite from the 2nd switch on
+
+▶ 7/9 端到端验证
+  ✅ 真实请求成功（模型回复 OK）—— 该通道当前可用
+```
+
 ---
 
 ## The problem
