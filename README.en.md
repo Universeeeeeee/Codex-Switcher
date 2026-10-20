@@ -8,9 +8,26 @@ macOS · one bash script + a ~250 KB native window · no gateway, no daemon · M
 
 ![Codex Switcher window](docs/images/app-window.png)
 
-<sub>Every switch prints its steps (backup → credentials → config → history labels → a real request → relaunch):</sub>
+<sub>A switch is now 3 steps (check + backup → apply → verify + relaunch), usually 2–10 s. Clicking the channel you are already on returns immediately:</sub>
 
 ```text
+▶ 1/3 检查 & 备份
+  ✅ config.toml 可解析 · 当前 provider=main / auth=chatgpt · 会话 661 条
+  ✅ 已备份 config/auth → ~/.codex-switcher/backups/20261020_144453-official
+
+▶ 2/3 应用
+  ✅ 登录态有效（token 剩余 10.0 天），无需刷新
+  ✅ config.toml 已更新（官方后端 …/backend-api/codex · gpt-6.1-sol / high）
+  ✅ 历史标签一致（661 条） · cc-switch 已同步
+
+▶ 3/3 验证 & 重启
+  ✅ 真实请求成功（模型回复 OK，6.8s）—— 该通道当前可用
+  ✅ ChatGPT 已重启（2s）
+═══════════════════════════════════════════════
+ ✅ 已切换到「邮箱登录（官方）」· 用时 9s
+```
+
+Switching to the channel that is already active skips everything (backup, writes, verification, relaunch) and returns "nothing to switch" in about 0.1 s.text
 ▶ 4/9 生成 config.toml
   provider=main | model=gpt-6-astra | effort=high | 中继 https://<your relay> | 保留 ChatGPT 登录
   ✅ config.toml 已更新
@@ -29,7 +46,7 @@ macOS · one bash script + a ~250 KB native window · no gateway, no daemon · M
 
 1. **It fixes bucketing today.** magpie's plan is broader but still an open issue; cc-switch doesn't touch it. Here the provider id is fixed, plus an optional **one-time** history migration (`threads.model_provider` and `model_provider` / `model_provider_id` inside session files — including easily-missed files like `….jsonl_副本`).
 2. **Zero always-on dependency.** No gateway, no daemon, no port. magpie is far more capable, but it must keep running — quit it and the agent loses its provider.
-3. **It proves the switch worked, and repairs broken configs.** Each switch fires one real request through Codex's own CLI (`--ephemeral`, no session written); upstream quota exhaustion surfaces as `DAILY_LIMIT_EXCEEDED` instead of a silent failure. Every run also asserts that the `[model_providers.*]` table referenced by `model_provider` exists — the exact cause of `Model provider not found`.
+3. **It proves the switch worked, and repairs broken configs.** Each switch fires one minimal real request using Codex's own protocol (no full `codex exec` cold start: 6–10 s instead of 30–90 s); upstream quota exhaustion surfaces instead of a silent failure, and a channel verified in the last 2 minutes is not re-tested. Use `--verify-cli` if you want the old CLI-based check. Every run also asserts that the `[model_providers.*]` table referenced by `model_provider` exists — the exact cause of `Model provider not found`.
 
 ## Comparison: magpie / cc-switch / this project
 
@@ -101,12 +118,13 @@ This installs the script to `~/.codex-switcher/`, creates `providers.json` from 
 ```bash
 ~/.codex-switcher/codex_switch.sh relay-a              # switch
 ~/.codex-switcher/codex_switch.sh official --restart   # switch and relaunch Codex
+~/.codex-switcher/codex_switch.sh official --no-verify # switch without the real request (fastest)
 ~/.codex-switcher/codex_switch.sh relay-a --dry-run    # show what would change
 ```
 
 Sign in to ChatGPT in the Codex app once; the tool snapshots that sign-in on your first switch, after which you can move freely between channels.
 
-Flags: `--dry-run`, `--no-history`, `--no-verify`, `--no-ccswitch`, `--legacy-ids`.
+Flags: `--dry-run`, `--no-history`, `--no-verify`, `--verify-cli`, `--no-ccswitch`, `--legacy-ids`. The app also has a "skip the real request" checkbox.
 
 ## Measured evidence (macOS 26, codex-cli 0.163.0-alpha.10.2)
 
@@ -119,8 +137,8 @@ Flags: `--dry-run`, `--no-history`, `--no-verify`, `--no-ccswitch`, `--legacy-id
 
 ## Safety
 
-- Backs up config / auth / state DB before every switch (last 15 kept) under `~/.codex-switcher/backups/`
-- `--dry-run` writes nothing; assertions cover `model_provider`, `base_url` and the token
+- Backs up config / auth before every switch; the state DB is only backed up when history labels actually need migrating (last 15 kept) under `~/.codex-switcher/backups/`
+- `--dry-run` writes nothing; assertions cover `model_provider`, `base_url` and the token; switching to the active channel writes nothing at all
 - History migration only rewrites tag fields — never message content or model fields
 
 ## Limitations
@@ -128,7 +146,7 @@ Flags: `--dry-run`, `--no-history`, `--no-verify`, `--no-ccswitch`, `--legacy-id
 - macOS + Codex only (SwiftUI GUI needs Xcode Command Line Tools)
 - No quota-aware failover — it tells you when a channel is exhausted, it doesn't hop for you
 - Does not inject relay models into Codex's own model picker; set the model per channel in `providers.json`
-- `https://chatgpt.com/backend-api/codex` is extracted from the CLI binary (undocumented, may change)
+- `https://chatgpt.com/backend-api/codex` is extracted from the CLI binary (undocumented, may change); the fast verifier uses the same undocumented endpoint — use `--verify-cli` to cross-check or `--no-verify` to skip if it ever misbehaves
 - Personal tool, no maintenance promise
 
 ## Credits

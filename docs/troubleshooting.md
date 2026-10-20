@@ -20,10 +20,10 @@
 
 **原因**：Codex 按 `model_provider` 分桶列出历史，而别的工具切换时只改了 `config.toml` / `auth.json`，没有同步历史标签，于是当前 provider 的桶里只有一部分会话。
 
-**处理**：本工具默认会做（第 5 步）。若你曾用 `--no-history` 跳过，补跑一次即可：
+**处理**：本工具默认会做（第 2 步「应用」里会自动检查并迁移）。若你曾用 `--no-history` 跳过，补跑一次即可：
 
 ```bash
-~/.codex-switcher/codex_switch.sh <通道>     # 第 5 步会统一标签
+~/.codex-switcher/codex_switch.sh <通道>     # 会自动把标签统一到 main
 ```
 
 底层做的就是：把 `~/.codex/state_5.sqlite` 的 `threads.model_provider` 与 `~/.codex/sessions/**/*.jsonl` 里的 `"model_provider"` / `"model_provider_id"` 统一成固定 id。
@@ -34,7 +34,7 @@
 
 **含义**：配置已经写好，但**这个上游现在发不出请求**（额度用尽，通常来自中继背后的账号池）。
 
-**处理**：切到另一个通道，或等额度重置。想先跳过验证：`--no-verify`。
+**处理**：切到另一个通道，或等额度重置。想先跳过验证：`--no-verify`（切换本身是毫秒级的，慢的只有这次真实请求）。
 
 ## 4. 切换后立刻用不了 / 行为没变
 
@@ -69,7 +69,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST "https://<你的中继>/respon
 
 ## 7. 官方通道登录失效
 
-脚本会在切换到官方时尝试刷新 token（先走 `providers.json` 的 `proxy`，再直连）。如果两者都不通：
+脚本只在官方 token 快过期（<1 天）时才会刷新（先走 `providers.json` 的 `proxy`，再直连）；token 还有效时直接复用，切换更快。如果刷新时两者都不通：
 
 - 网络能直连 `auth.openai.com` 就不需要代理，可把 `proxy` 留空
 - 都不通时会沿用快照里的 token（通常还有效数天）；彻底失效则需在 Codex 里重新登录一次，再切一次（脚本会更新快照）
@@ -96,3 +96,24 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST "https://<你的中继>/respon
 ```
 
 把 `config.toml.before` / `auth.json.before` 拷回 `~/.codex/` 即可回滚配置与登录态；历史标签的改动可用 `state_5.sqlite.before` 还原。
+
+## 9. 验证结果怎么看（以及为什么不再用 codex CLI 验证）
+
+切换后的验证不再是「启动整个 codex CLI 跑一次 `codex exec`」，而是**按 Codex 的协议直接发一条最小请求**：
+
+- 官方通道：`POST {officialBaseUrl}/responses`，带 `auth.json` 里的 access token 和 `chatgpt-account-id`
+- 中继通道：`POST {base_url}/responses`，带 `apiKey`
+
+这样把验证从 30–90 秒（CLI 启动时会先初始化内置 MCP / 插件目录，连 `ps/mcp` 超时 + 重试）压到 **6–10 秒**。
+
+输出里的几种结果：
+
+| 输出 | 含义 | 要不要处理 |
+|---|---|---|
+| ✅ 真实请求成功（模型回复 OK） | 通道可用 | 不用 |
+| ⏭ 该通道 Ns 前刚验证通过，跳过重复验证 | 2 分钟内验证过、配置也没变，省掉重复请求 | 不用 |
+| ❌ 上游额度/容量问题 | 配置已写好，但这个上游现在发不出请求 | 换通道或等额度 |
+| ⚠️ 验证没发出去（网络/代理不稳） | 请求根本没发出去，**不代表通道坏了** | 检查代理/网络，或忽略 |
+| ⚠️ 验证未通过（HTTP xxx） | 拿到了响应但不是 OK | 看提示里的 HTTP 码/消息 |
+
+需要最接近真实会话的验证时用 `--verify-cli`（会启动 codex CLI，慢但走完整链路）；完全不想等就用 `--no-verify`。

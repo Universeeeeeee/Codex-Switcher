@@ -8,9 +8,26 @@ macOS · 一个 bash 脚本 + 一个 250 KB 的原生小窗口 · 无网关、�
 
 ![Codex Switcher 界面](docs/images/app-window.png)
 
-<sub>每次切换都会逐步骤输出（备份 → 凭据 → 配置 → 历史标签 → 真实请求验证 → 重启）：</sub>
+<sub>现在一次切换只有 3 步（检查+备份 → 应用 → 验证+重启），正常 2–10 秒；已经在该通道时直接秒退：</sub>
 
 ```text
+▶ 1/3 检查 & 备份
+  ✅ config.toml 可解析 · 当前 provider=main / auth=chatgpt · 会话 661 条
+  ✅ 已备份 config/auth → ~/.codex-switcher/backups/20261020_144453-official
+
+▶ 2/3 应用
+  ✅ 登录态有效（token 剩余 10.0 天），无需刷新
+  ✅ config.toml 已更新（官方后端 …/backend-api/codex · gpt-6.1-sol / high）
+  ✅ 历史标签一致（661 条） · cc-switch 已同步
+
+▶ 3/3 验证 & 重启
+  ✅ 真实请求成功（模型回复 OK，6.8s）—— 该通道当前可用
+  ✅ ChatGPT 已重启（2s）
+═══════════════════════════════════════════════
+ ✅ 已切换到「邮箱登录（官方）」· 用时 9s
+```
+
+再点一次同一个通道（或已经在该通道）不会重复做上面这些：备份、写入、验证、重启全部跳过，0.1 秒返回「无需切换」。text
 ▶ 4/9 生成 config.toml
   provider=main | model=gpt-6-astra | effort=high | 中继 https://<你的中继> | 保留 ChatGPT 登录
   ✅ config.toml 已更新
@@ -29,7 +46,7 @@ macOS · 一个 bash 脚本 + 一个 250 KB 的原生小窗口 · 无网关、�
 
 1. **分桶问题今天就能解决。** magpie 的方案更完整但还在 issue 阶段；cc-switch 不处理这件事。本项目用「固定 provider id」从源头消除分桶——而且必要时提供**一次性**历史迁移（`threads.model_provider` + 会话文件里的 `model_provider` / `model_provider_id` 一起改，含 `….jsonl_副本` 这类容易漏掉的文件）。
 2. **零常驻依赖。** Codex 直接连官方后端或你的中继，中间没有网关、没有守护进程、没有端口。magpie 很强大，但它要求网关常驻——magpie 一退出，Agent 就失去 provider。
-3. **切换即自证，坏了会自修。** 每次切换后真的发一条请求（用 Codex 自带的 CLI，`--ephemeral` 不写会话文件），上游额度耗尽会明确报 `DAILY_LIMIT_EXCEEDED` 而不是静默失败；同时每次运行都检查 `model_provider` 指向的 `[model_providers.*]` 表是否存在——这正是 Codex 报 `Model provider not found` 的原因。
+3. **切换即自证，坏了会自修。** 每次切换后会**直接按 Codex 的协议发一条最小真实请求**（不再启动整个 `codex exec`，正常 6–10 秒而不是 30–90 秒），上游额度耗尽会明确报出来而不是静默失败；2 分钟内刚验证通过的通道不会重复请求。想看最接近真实会话的验证，用 `--verify-cli`。同时每次运行都检查 `model_provider` 指向的 `[model_providers.*]` 表是否存在——这正是 Codex 报 `Model provider not found` 的原因。
 
 ## 与 magpie / cc-switch 对比
 
@@ -145,21 +162,22 @@ open /Applications/CodexSwitcher.app
 
 首次使用：**先在 Codex 桌面端用官方账号登录一次**，然后随便切一次（脚本会把登录态留存到 `~/.codex-switcher/auth/official.json`），之后三个通道之间就可以随便来回切。
 
-其它开关：`--no-history`、`--no-verify`、`--no-ccswitch`、`--legacy-ids`。
+其它开关：`--no-history`、`--no-verify`（跳过真实验证，秒切）、`--verify-cli`（用 Codex CLI 验证，慢但最接近真实会话）、`--no-ccswitch`、`--legacy-ids`。App 里也可以勾选「跳过真实请求验证」。
 
 ## 它在每次切换时做了什么
 
 ```
-1/9 检查当前状态        解析 config.toml；检测 provider 段缺失这种"坏配置"
-2/9 备份                config.toml / auth.json / state_5.sqlite → ~/.codex-switcher/backups/（保留最近 15 份）
-3/9 凭据                官方：恢复登录态快照并尝试刷新 token；中继：保留登录态（或退回 apikey）
-4/9 生成 config.toml    只重写 [model_providers.*] 这一段，其余内容与注释原样保留；写完再断言段存在
-5/9 会话历史标签        统一到固定 provider id（第一次会迁移，之后每次都是"已一致"）
-6/9 同步 cc-switch      装了才做，按 base_url 匹配行，尽力而为
-7/9 端到端验证          用 Codex 自带 CLI 真发一次请求（--ephemeral，不产生会话）
-8/9 重启应用            可选（--restart 或 App 里的勾选框）
-9/9 摘要 + 日志          ~/.codex-switcher/logs/<时间>-<通道>.log
+1/3 检查 & 备份  解析 config.toml（顺手检测「provider 段缺失」这种坏配置）；
+                 备份 config.toml / auth.json；只有真要迁移历史标签时才额外备份 20MB 的 state 库
+2/3 应用         只写缺的：token 快过期（<1 天）才刷新；config 有差异才写；
+                 历史标签不一致才迁移；cc-switch 已同步就不动
+3/3 验证 & 重启  按 Codex 协议发一条最小真实请求（--no-verify 可跳过；2 分钟内验证过则跳过）；
+                 --restart 时重启 ChatGPT 桌面端（与验证并行，约 2 秒）
 ```
+
+**已经处于目标通道时直接秒退**：不备份、不写文件、不验证、不重启，0.1 秒返回「无需切换」。
+
+> 为什么不再用 `codex exec` 验证：它会先初始化内置 MCP / 插件目录，实测一次要 30–90 秒（官方后端连 `ps/mcp` 超时 + 重试）。直接发最小请求把验证压到 6–10 秒，而且少一次 CLI 冷启动。想保留原来的验证方式：`--verify-cli`。
 
 ## 实测证据（macOS 26 / codex-cli 0.163.0-alpha.10.2）
 
@@ -172,7 +190,7 @@ open /Applications/CodexSwitcher.app
 
 ## 安全与回滚
 
-- 切换前**必做备份**（config / auth / state 库），保留最近 15 份：`~/.codex-switcher/backups/`
+- 切换前**必做备份**（config / auth；state 库只在需要迁移历史标签时才备份），保留最近 15 份：`~/.codex-switcher/backups/`。已经处于目标通道时不做任何写入，也不产生备份
 - `--dry-run` 可先看不写；脚本对 `model_provider`、`base_url`、token 都有断言校验
 - 历史标签迁移只改标签字段（`model_provider` / `model_provider_id`），**不动会话内容与模型字段**
 - 想完全退回旧行为：`--legacy-ids`（官方=`openai`、中继=`custom`，但会重新分桶）
@@ -182,7 +200,7 @@ open /Applications/CodexSwitcher.app
 - **仅 macOS、仅 Codex**。GUI 用 SwiftUI 写的，需要 Xcode Command Line Tools 才能编译
 - **没有额度路由/故障转移**：上游额度耗尽时脚本会告诉你，但不会自动换通道
 - **不会把中继的模型注入 Codex 自带模型列表**（那是 magpie 的 `model_catalog_json` 做的事）。所以别在 Codex 的模型选择器里点具体模型——模型由本工具的 `providers.json` 按通道设置
-- 官方后端地址 `https://chatgpt.com/backend-api/codex` 是从 CLI 二进制里取出来的，属于未公开接口，Codex 升级后可能变化
+- 官方后端地址 `https://chatgpt.com/backend-api/codex` 是从 CLI 二进制里取出来的，属于未公开接口，Codex 升级后可能变化；快速验证也用这个未公开接口，若某次验证异常，可以先用 `--verify-cli` 交叉确认，或用 `--no-verify` 跳过
 - 个人工具，无维护承诺；Codex 的配置格式变化需要跟（例如 `disable_response_storage` 在新版已被判为 unrecognized，本脚本会自动清理）
 
 ## 致谢

@@ -32,7 +32,8 @@ final class Switcher: ObservableObject {
     @Published var status: String = "读取中…"
     @Published var output: String = ""
     @Published var busy = false
-    @Published var autoRestart = true
+    @Published var autoRestart = false
+    @Published var skipVerify = false
 
     private var root: String {
         ProcessInfo.processInfo.environment["CODEX_SWITCHER_HOME"]
@@ -90,6 +91,7 @@ final class Switcher: ObservableObject {
         output = ""
         var args = [p.id]
         if autoRestart { args.append("--restart") }
+        if skipVerify { args.append("--no-verify") }
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -198,11 +200,13 @@ struct ContentView: View {
 
             Toggle("切换后自动退出并重启 Codex 桌面端", isOn: $switcher.autoRestart)
                 .toggleStyle(.checkbox)
+            Toggle("跳过真实请求验证（更快，秒级切完）", isOn: $switcher.skipVerify)
+                .toggleStyle(.checkbox)
 
             if switcher.busy {
                 HStack(spacing: 8) {
                     ProgressView().scaleEffect(0.7)
-                    Text("正在切换…（含一次真实请求验证，约 20 秒）").font(.caption).foregroundColor(.secondary)
+                    Text("正在切换…（正常情况下 2–10 秒）").font(.caption).foregroundColor(.secondary)
                 }
             }
 
