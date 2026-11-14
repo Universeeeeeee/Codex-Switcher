@@ -103,6 +103,40 @@ tildify() { printf '%s' "${1/#$HOME/~}"; }
 elapsed() { echo $(( $(date +%s) - T0 )); }
 now_hm() { date '+%Y-%m-%d %H:%M'; }
 
+# ── Magpie 当前渠道和额度 ───────────────────────────────────────────────────
+if [ "$TARGET" = "magpie-status" ]; then
+  [ -x "$MAGPIE_BIN" ] || { err "找不到 Magpie：$MAGPIE_BIN"; exit 80; }
+  MAGPIE_ADDR="$MAGPIE_ADDR" MAGPIE_KEY="$MAGPIE_KEY" python3 - <<'PY'
+import json, os, urllib.request
+base = 'http://' + os.environ['MAGPIE_ADDR'] + '/v1/magpie/'
+headers = {'Authorization': 'Bearer ' + os.environ['MAGPIE_KEY']}
+def get(path):
+    req = urllib.request.Request(base + path, headers=headers)
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read().decode())
+try:
+    rows = get('usage/requests').get('rows', [])
+    row = next((x for x in rows if x.get('status', 500) < 400), rows[0] if rows else {})
+    if row:
+        print(f"当前渠道: {row.get('providerName') or row.get('provider')} · {row.get('model')} · {row.get('t')}")
+        print(f"路由: {row.get('req', '-')} → {row.get('served', '-')}, 状态 {row.get('status', '-')}")
+    else:
+        print('当前渠道: 暂无请求记录')
+    quotas = get('quotas').get('data', [])
+    print('额度:')
+    for q in quotas:
+        windows = q.get('windows') or []
+        parts = [f"{w.get('name')}:剩余 {w.get('remaining')}%" for w in windows if w.get('remaining') is not None]
+        if q.get('balance'):
+            parts.append('余额 ' + str(q['balance']))
+        print('  ' + q.get('name', q.get('provider', '?')) + ': ' + (', '.join(parts) or '暂无额度数据'))
+except Exception as e:
+    print('无法读取 Magpie 状态：' + str(e))
+    raise SystemExit(1)
+PY
+  exit $?
+fi
+
 # ── Magpie 回滚 ─────────────────────────────────────────────────────────────
 if [ "$TARGET" = "magpie-off" ]; then
   latest=$(find "$ROOT/backups" -type f -name 'config.toml.before' -path '*-magpie/*' 2>/dev/null | sort | tail -1)
@@ -255,13 +289,16 @@ for pid in ('georder', 'xfastapi'):
             result = subprocess.run([magpie, 'provider', 'set', pid, 'url=' + p['baseUrl']],
                                     text=True, capture_output=True, timeout=45)
         if result.returncode == 0:
-            result = subprocess.run([magpie, 'provider', 'models', pid, 'gpt-6-astra'],
+            result = subprocess.run([magpie, 'provider', 'models', pid, 'all'],
                                     text=True, capture_output=True, timeout=45)
     else:
         args = [magpie, 'provider', 'add', pid,
                 'url=' + p['baseUrl'], 'key=' + p['apiKey'],
                 'models=gpt-6-astra']
         result = subprocess.run(args, text=True, capture_output=True, timeout=45)
+        if result.returncode == 0:
+            result = subprocess.run([magpie, 'provider', 'models', pid, 'all'],
+                                    text=True, capture_output=True, timeout=45)
     if result.returncode:
         print((result.stdout + result.stderr).replace(p['apiKey'], '<redacted>'), file=sys.stderr)
         raise SystemExit(result.returncode)
@@ -369,18 +406,38 @@ PY
 
   magpie_catalog() {
     if [ "$DRY" = "1" ]; then
-      skip "试运行：会生成只包含 gpt-6-astra 的 Codex 模型目录"
+      skip "试运行：会生成完整模型目录，默认模型为 gpt-6-astra"
       return 0
     fi
-    if ! CODEX_DIR="$CODEX_DIR" OUT="$MAGPIE_CATALOG" python3 - <<'PY'
-import json, os, pathlib, tempfile
+    if ! CODEX_DIR="$CODEX_DIR" OUT="$MAGPIE_CATALOG" MAGPIE_BASE="$MAGPIE_BASE" MAGPIE_KEY="$MAGPIE_KEY" python3 - <<'PY'
+import copy, json, os, pathlib, tempfile, urllib.request
 cache = pathlib.Path(os.environ['CODEX_DIR']) / 'models_cache.json'
 if not cache.exists():
     raise SystemExit(f'找不到 Codex 模型缓存：{cache}')
 data = json.loads(cache.read_text())
-models = [m for m in data.get('models', []) if m.get('slug') == 'gpt-6-astra']
-if len(models) != 1:
-    raise SystemExit('Codex 模型缓存中没有唯一的 gpt-6-astra')
+models = data.get('models', [])
+if not any(m.get('slug') == 'gpt-6-astra' for m in models):
+    raise SystemExit('Codex 模型缓存中没有 gpt-6-astra')
+req = urllib.request.Request(os.environ['MAGPIE_BASE'].rstrip('/') + '/models',
+    headers={'Authorization': 'Bearer ' + os.environ['MAGPIE_KEY']})
+with urllib.request.urlopen(req, timeout=30) as r:
+    remote = json.loads(r.read().decode()).get('data', [])
+known = {m.get('slug') for m in models}
+template = next(m for m in models if m.get('slug') == 'gpt-6-astra')
+for item in remote:
+    slug = item.get('id', '')
+    if not slug or slug in known or slug in ('auto/gpt-6-astra', 'group/codex-astra'):
+        continue
+    if not (slug.startswith('georder/') or slug.startswith('xfastapi/') or slug.startswith('group/')):
+        continue
+    clone = copy.deepcopy(template)
+    clone['slug'] = slug
+    clone['display_name'] = item.get('display_name') or slug
+    clone['description'] = 'Magpie upstream: ' + slug
+    if item.get('context_window'):
+        clone['context_window'] = item['context_window']
+    models.append(clone)
+    known.add(slug)
 out = pathlib.Path(os.environ['OUT'])
 out.parent.mkdir(parents=True, exist_ok=True)
 fd, tmp = tempfile.mkstemp(prefix='.magpie-models-', dir=str(out.parent))
@@ -401,7 +458,7 @@ PY
       err "生成的 Codex 模型目录为空"
       return 1
     }
-    ok "Codex 模型目录已限制为 gpt-6-astra"
+    ok "Codex 模型目录已包含内置模型和 Magpie 上游模型（默认 gpt-6-astra）"
   }
 
   magpie_config() {

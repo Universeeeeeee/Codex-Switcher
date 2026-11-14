@@ -30,6 +30,7 @@ final class Switcher: ObservableObject {
     @Published var providers: [Provider] = []
     @Published var currentId: String? = nil
     @Published var status: String = "读取中…"
+    @Published var routeStatus: String = ""
     @Published var output: String = ""
     @Published var busy = false
     @Published var autoRestart = true
@@ -100,6 +101,27 @@ final class Switcher: ObservableObject {
         bits.append("模型 \(model)")
         bits.append(hasToken ? "保留 ChatGPT 登录" : "官方登录")
         status = "当前: " + bits.joined(separator: "  ·  ")
+        refreshMagpieStatus()
+    }
+
+    private func refreshMagpieStatus() {
+        guard FileManager.default.fileExists(atPath: script) else { return }
+        DispatchQueue.global(qos: .utility).async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/bash")
+            task.arguments = [self.script, "magpie-status"]
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = pipe
+            do {
+                try task.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let text = String(data: data, encoding: .utf8) ?? ""
+                DispatchQueue.main.async { self.routeStatus = text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            } catch {
+                DispatchQueue.main.async { self.routeStatus = "" }
+            }
+        }
     }
 
     func switchTo(_ p: Provider) {
@@ -188,6 +210,13 @@ struct ContentView: View {
                 .font(.callout)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if !switcher.routeStatus.isEmpty {
+                Text(switcher.routeStatus)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Divider()
 
