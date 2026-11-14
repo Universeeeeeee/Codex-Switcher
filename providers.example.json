@@ -9,7 +9,7 @@
       "name": "邮箱登录（官方）",
       "desc": "ChatGPT 官方账号；模型请求走 chatgpt.com/backend-api/codex",
       "mode": "chatgpt",
-      "model": "gpt-6.1-sol",
+      "model": "gpt-6-astra",
       "effort": "high",
       "authFile": "~/.codex-switcher/auth/official.json"
     },
@@ -29,7 +29,7 @@
       "name": "中继 B（局域网，示例）",
       "desc": "局域网/内网中继，注意只在对应网络下可用",
       "mode": "apikey",
-      "model": "gpt-6.1-sol",
+      "model": "gpt-6-astra",
       "effort": "high",
       "baseUrl": "http://192.168.1.100:8081/v1",
       "wireApi": "responses",

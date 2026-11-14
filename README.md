@@ -45,7 +45,7 @@ macOS · 一个 bash 脚本 + 一个 250 KB 的原生小窗口 · 无网关、�
 ## 为什么选它：三条
 
 1. **分桶问题今天就能解决。** magpie 的方案更完整但还在 issue 阶段；cc-switch 不处理这件事。本项目用「固定 provider id」从源头消除分桶——而且必要时提供**一次性**历史迁移（`threads.model_provider` + 会话文件里的 `model_provider` / `model_provider_id` 一起改，含 `….jsonl_副本` 这类容易漏掉的文件）。
-2. **零常驻依赖。** Codex 直接连官方后端或你的中继，中间没有网关、没有守护进程、没有端口。magpie 很强大，但它要求网关常驻——magpie 一退出，Agent 就失去 provider。
+2. **直连模式零常驻依赖。** Codex 可以直接连官方后端或中继；需要自动路由时再启用可选的 Magpie 网关模式。
 3. **切换即自证，坏了会自修。** 每次切换后会**直接按 Codex 的协议发一条最小真实请求**（不再启动整个 `codex exec`，正常 6–10 秒而不是 30–90 秒），上游额度耗尽会明确报出来而不是静默失败；2 分钟内刚验证通过的通道不会重复请求。想看最接近真实会话的验证，用 `--verify-cli`。同时每次运行都检查 `model_provider` 指向的 `[model_providers.*]` 表是否存在——这正是 Codex 报 `Model provider not found` 的原因。
 
 ## 与 magpie / cc-switch 对比
@@ -54,11 +54,11 @@ macOS · 一个 bash 脚本 + 一个 250 KB 的原生小窗口 · 无网关、�
 |---|---|---|---|
 | 定位 | 只干一件事：Codex 换上游但历史不分桶 | 多 CLI 的供应商配置切换（GUI） | 所有 Agent 的模型 / 供应商 / 账号统一管理 |
 | 界面 | 原生小窗口（3 个按钮） | GUI | 菜单栏 + 窗口 + TUI + CLI |
-| **会话历史是否分桶** | ✅ **永不**（provider id 固定） | ❌ 切换后另一个桶的会话看不到¹ | ⚠️ 目前会分成 `openai` / `magpie` 两个桶，#994 已决定实现，**截至 2026-10-16 未发布** |
+| **会话历史是否分桶** | ✅ **永不**（直连和 Magpie 都固定 `main`） | ❌ 切换后另一个桶的会话看不到¹ | 取决于 Agent 接入方式 |
 | 保留 ChatGPT 登录 | ✅ 中继通道也保留（可选退回 apikey） | 可配置保留 | ✅ 明确「不触碰登录」 |
 | 切换后是否验证真的可用 | ✅ **每次都真发一次请求**（`codex exec --ephemeral`，不落盘） | ❌ 无 | ⚠️ 有网关侧健康检查，不校验 Codex 端到端 |
 | 配置被改坏时自修复 | ✅ 每次运行检测 `model_provider` 指向的表是否存在，缺失即补 | ❌ | ✅ 文档明确会补回 |
-| 运行依赖 | **无**（Codex 直连上游） | GUI 应用 | **本地网关常驻** 127.0.0.1:3425，magpie 退出后 Agent 就失去 provider |
+| 运行依赖 | 直连模式无；Magpie 模式使用本地网关 | GUI 应用 | **本地网关** 127.0.0.1:3425 |
 | 体量 / 可审计 | ~450 行 bash + ~250 行 Swift，纯文本 | GUI | 大型项目（多语言、插件、路由） |
 
 ¹ 我们在 macOS + Codex 桌面端上的实测：用 cc-switch 切换供应商后，Codex 侧的历史桶标签没有跟着变，于是侧边栏只剩下与新 provider 匹配的那一个桶（我们那次是 647 条里只看得到 1 条）。cc-switch 的定位是管理 `config.toml` / `auth.json`，会话标签不在它的职责范围内。
@@ -126,7 +126,7 @@ cd Codex-Switcher
   "proxy": "http://127.0.0.1:7897",
   "providers": [
     { "id": "official", "name": "邮箱登录（官方）", "mode": "chatgpt",
-      "model": "gpt-6.1-sol", "effort": "high",
+      "model": "gpt-6-astra", "effort": "high",
       "authFile": "~/.codex-switcher/auth/official.json" },
 
     { "id": "relay-a", "name": "中继 A", "mode": "apikey",
@@ -155,10 +155,17 @@ cd Codex-Switcher
 ~/.codex-switcher/codex_switch.sh relay-a              # 切换
 ~/.codex-switcher/codex_switch.sh official --restart   # 切换并自动重启 Codex
 ~/.codex-switcher/codex_switch.sh relay-a --dry-run    # 只看会改什么，不写入
+~/.codex-switcher/codex_switch.sh magpie --restart     # Magpie 路由：main → georder → xfastapi
+~/.codex-switcher/codex_switch.sh magpie-off --restart # 恢复 Magpie 之前的直连配置
 
 # 或直接打开 App 点按钮
 open /Applications/CodexSwitcher.app
 ```
+
+`magpie` 模式要求已安装 Magpie。Switcher 会启动或复用本机 `127.0.0.1:3425` 网关，
+把 `georder` 和 `xfastapi` 同步为 `gpt-6-astra`，创建 `group/codex-astra` 顺序路由，
+并把固定的 `main` Provider 指向网关。Codex 的 `model_provider` 始终保持 `main`，因此不会产生新的会话桶。
+同时生成 `~/.codex-switcher/magpie-models.json`，让 Codex 原生模型列表只显示 `gpt-6-astra`。
 
 首次使用：**先在 Codex 桌面端用官方账号登录一次**，然后随便切一次（脚本会把登录态留存到 `~/.codex-switcher/auth/official.json`），之后三个通道之间就可以随便来回切。
 
@@ -198,8 +205,9 @@ open /Applications/CodexSwitcher.app
 ## 限制
 
 - **仅 macOS、仅 Codex**。GUI 用 SwiftUI 写的，需要 Xcode Command Line Tools 才能编译
-- **没有额度路由/故障转移**：上游额度耗尽时脚本会告诉你，但不会自动换通道
-- **不会把中继的模型注入 Codex 自带模型列表**（那是 magpie 的 `model_catalog_json` 做的事）。所以别在 Codex 的模型选择器里点具体模型——模型由本工具的 `providers.json` 按通道设置
+- **直连模式没有额度路由/故障转移**：上游额度耗尽时脚本会告诉你；启用 Magpie 模式后由 Magpie 负责自动换通道
+- **Magpie 路由模式**：启用 `magpie` 后由 Magpie 负责 `gpt-6-astra` 的顺序故障转移；直连模式的行为保持不变
+- **直连模式不会把中继模型注入 Codex 列表**；Magpie 模式会生成只含 `gpt-6-astra` 的 `model_catalog_json`，模型路由交给 Magpie
 - 官方后端地址 `https://chatgpt.com/backend-api/codex` 是从 CLI 二进制里取出来的，属于未公开接口，Codex 升级后可能变化；快速验证也用这个未公开接口，若某次验证异常，可以先用 `--verify-cli` 交叉确认，或用 `--no-verify` 跳过
 - 个人工具，无维护承诺；Codex 的配置格式变化需要跟（例如 `disable_response_storage` 在新版已被判为 unrecognized，本脚本会自动清理）
 

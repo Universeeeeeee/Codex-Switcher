@@ -32,8 +32,8 @@ final class Switcher: ObservableObject {
     @Published var status: String = "读取中…"
     @Published var output: String = ""
     @Published var busy = false
-    @Published var autoRestart = false
-    @Published var skipVerify = false
+    @Published var autoRestart = true
+    @Published var skipVerify = true
 
     private var root: String {
         ProcessInfo.processInfo.environment["CODEX_SWITCHER_HOME"]
@@ -52,6 +52,21 @@ final class Switcher: ObservableObject {
            let file = try? JSONDecoder().decode(ProviderFile.self, from: data) {
             providers = file.providers
             providerId = file.providerId ?? "main"
+            let magpiePaths = [
+                "\(NSHomeDirectory())/.local/bin/magpie",
+                "/Applications/magpie.app/Contents/MacOS/magpie"
+            ]
+            if !providers.contains(where: { $0.id == "magpie" }),
+               magpiePaths.contains(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+                providers.append(Provider(
+                    id: "magpie",
+                    name: "Magpie 路由",
+                    desc: "主账号 → georder → xfastapi",
+                    mode: "magpie",
+                    model: "gpt-6-astra",
+                    baseUrl: "http://127.0.0.1:3425/v1"
+                ))
+            }
         } else {
             output += "⚠️ 无法读取 \(root)/providers.json\n"
         }

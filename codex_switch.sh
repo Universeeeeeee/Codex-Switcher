@@ -10,6 +10,7 @@
 #    --verify-cli   用 Codex 自带 CLI 做验证（更接近真实会话，但启动慢 30–90 秒）
 #    --no-ccswitch  不把状态同步进 cc-switch（若装了的话）
 #    --legacy-ids   用「官方=openai / 中继=custom」的双 id 方案（会产生分桶，仅兼容旧用法）
+#    magpie         启用 Magpie 本地网关（仍固定使用 main，不改变会话分桶）
 #
 #  provider-id 来自 ~/.codex-switcher/providers.json
 #
@@ -49,10 +50,17 @@ CCSW_SETTINGS="$HOME/.cc-switch/settings.json"
 CHATGPT_APP="${CODEX_APP:-/Applications/ChatGPT.app}"
 CODEX_CLI="$CHATGPT_APP/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
 CLIENT_ID="app_EMoamEEZ73f0CkXaXp7hrann"
+MAGPIE_BIN="${MAGPIE_BIN:-$HOME/.local/bin/magpie}"
+MAGPIE_ADDR="${MAGPIE_ADDR:-127.0.0.1:3425}"
+MAGPIE_BASE="http://${MAGPIE_ADDR}/v1"
+MAGPIE_KEY="${MAGPIE_KEY:-magpie}"
+MAGPIE_PID_FILE="$ROOT/magpie.pid"
+MAGPIE_LOG="$ROOT/logs/magpie-gateway.log"
+MAGPIE_CATALOG="$ROOT/magpie-models.json"
 
 TARGET="${1:-}"
 if [ -z "$TARGET" ]; then
-  echo "用法: $(basename "$0") <provider-id> [--dry-run] [--no-history] [--restart] [--no-verify] [--verify-cli] [--no-ccswitch] [--legacy-ids]"
+  echo "用法: $(basename "$0") <provider-id|magpie> [--dry-run] [--no-history] [--restart] [--no-verify] [--verify-cli] [--no-ccswitch] [--legacy-ids]"
   echo "可用通道见 $PROV_JSON"
   exit 64
 fi
@@ -92,6 +100,249 @@ mask() { sed -E 's/(sk-[A-Za-z0-9]{6})[A-Za-z0-9]+/\1***/g'; }
 tildify() { printf '%s' "${1/#$HOME/~}"; }
 elapsed() { echo $(( $(date +%s) - T0 )); }
 now_hm() { date '+%Y-%m-%d %H:%M'; }
+
+# ── Magpie 回滚 ─────────────────────────────────────────────────────────────
+if [ "$TARGET" = "magpie-off" ]; then
+  latest=$(find "$ROOT/backups" -type f -name 'config.toml.before' -path '*-magpie/*' 2>/dev/null | sort | tail -1)
+  [ -n "$latest" ] || { err "找不到 Magpie 模式备份，无法自动回滚"; exit 75; }
+  if [ "$DRY" = "1" ]; then
+    skip "试运行：会恢复 $(tildify "$latest")"
+  else
+    cp "$latest" "$CFG"
+    ok "已恢复 Magpie 之前的 config.toml"
+    if [ -f "$MAGPIE_PID_FILE" ]; then
+      pid=$(cat "$MAGPIE_PID_FILE" 2>/dev/null || true)
+      cmd=$(ps -p "$pid" -o command= 2>/dev/null || true)
+      if [ -n "$pid" ] && [[ "$cmd" == *"$MAGPIE_BIN serve"* ]]; then
+        kill "$pid" 2>/dev/null || true
+        rm -f "$MAGPIE_PID_FILE"
+        ok "已停止由 Switcher 启动的 Magpie（pid=$pid）"
+      fi
+    fi
+  fi
+  if [ "$RESTART" = "1" ] && [ "$DRY" = "0" ]; then
+    osascript - "$CHATGPT_APP" >/dev/null 2>&1 <<'APPLESCRIPT'
+on run argv
+  tell application (item 1 of argv) to quit
+end run
+APPLESCRIPT
+    open -a "$CHATGPT_APP" >/dev/null 2>&1 || true
+    ok "ChatGPT 已请求重启"
+  fi
+  exit 0
+fi
+
+# ── Magpie 网关模式 ────────────────────────────────────────────────────────
+# 只管理 Magpie 网关和固定 main Provider；直连模式沿用下面原有流程。
+if [ "$TARGET" = "magpie" ]; then
+  magpie_health() {
+    [ -x "$MAGPIE_BIN" ] || return 1
+    "$MAGPIE_BIN" healthcheck --addr "$MAGPIE_ADDR" >/dev/null 2>&1
+  }
+
+  magpie_start() {
+    if magpie_health; then
+      ok "Magpie 网关已运行（${MAGPIE_ADDR}）"
+      return 0
+    fi
+    [ -x "$MAGPIE_BIN" ] || { err "找不到 Magpie：$MAGPIE_BIN"; return 1; }
+    if [ "$DRY" = "1" ]; then
+      skip "试运行：会启动 Magpie 网关（${MAGPIE_ADDR}）"
+      return 0
+    fi
+    mkdir -p "$(dirname "$MAGPIE_LOG")"
+    MAGPIE_ADDR="$MAGPIE_ADDR" nohup "$MAGPIE_BIN" serve >>"$MAGPIE_LOG" 2>&1 &
+    local pid=$!
+    printf '%s\n' "$pid" >"$MAGPIE_PID_FILE"
+    for _ in $(seq 1 60); do
+      if magpie_health; then
+        ok "Magpie 网关已启动（pid=$pid，$MAGPIE_ADDR）"
+        return 0
+      fi
+      sleep 0.2
+    done
+    err "Magpie 网关启动失败，请查看 $(tildify "$MAGPIE_LOG")"
+    return 1
+  }
+
+  magpie_sync() {
+    [ "$DRY" = "1" ] && { skip "试运行：会同步 georder/xfastapi 到 Magpie"; return 0; }
+    PROV_JSON="$PROV_JSON" MAGPIE_BIN="$MAGPIE_BIN" python3 - <<'PY'
+import json, os, subprocess, sys
+
+prov = json.load(open(os.environ['PROV_JSON']))
+magpie = os.environ['MAGPIE_BIN']
+catalog = subprocess.run([magpie, 'models'], text=True, capture_output=True, timeout=45).stdout
+for pid in ('georder', 'xfastapi'):
+    p = next((x for x in prov.get('providers', []) if x.get('id') == pid), None)
+    if not p or not p.get('baseUrl') or not p.get('apiKey'):
+        print(f'{pid}: providers.json 缺少 baseUrl/apiKey', file=sys.stderr)
+        raise SystemExit(1)
+    if f'{pid}/gpt-6-astra' in catalog:
+        args = [magpie, 'provider', 'key', pid, p['apiKey']]
+        result = subprocess.run(args, text=True, capture_output=True, timeout=45)
+        if result.returncode == 0:
+            result = subprocess.run([magpie, 'provider', 'models', pid, 'gpt-6-astra'],
+                                    text=True, capture_output=True, timeout=45)
+    else:
+        args = [magpie, 'provider', 'add', pid,
+                'url=' + p['baseUrl'], 'key=' + p['apiKey'],
+                'models=gpt-6-astra']
+        result = subprocess.run(args, text=True, capture_output=True, timeout=45)
+    if result.returncode:
+        print((result.stdout + result.stderr).replace(p['apiKey'], '<redacted>'), file=sys.stderr)
+        raise SystemExit(result.returncode)
+    print(pid)
+PY
+    ok "georder/xfastapi 已同步到 Magpie"
+  }
+
+  magpie_route() {
+    if [ "$DRY" = "1" ]; then
+      skip "试运行：会确保 group/codex-astra 与 model-map 映射"
+      return 0
+    fi
+    "$MAGPIE_BIN" group set codex-astra \
+      models=codex/gpt-6-astra,georder/gpt-6-astra,xfastapi/gpt-6-astra \
+      routing=order stays=session >/dev/null 2>&1 \
+      || "$MAGPIE_BIN" group add "Codex Astra" \
+        models=codex/gpt-6-astra,georder/gpt-6-astra,xfastapi/gpt-6-astra \
+        routing=order stays=session >/dev/null 2>&1
+    if ! rg -q 'middleware-model-map|model-map' "$HOME/.config/magpie/plugins.yml" 2>/dev/null; then
+      "$MAGPIE_BIN" plugin add @magpie-community/middleware-model-map >/dev/null 2>&1 || {
+        err "无法安装 Magpie model-map 插件"; return 1;
+      }
+    fi
+    "$MAGPIE_BIN" plugin options model-map \
+      '{"mapping":{"gpt-6-astra":"group/codex-astra"}}' >/dev/null 2>&1 || {
+        err "无法配置 Magpie model-map 插件"; return 1;
+      }
+    ok "路由组已固定：main → georder → xfastapi（gpt-6-astra）"
+  }
+
+  magpie_catalog() {
+    if [ "$DRY" = "1" ]; then
+      skip "试运行：会生成只包含 gpt-6-astra 的 Codex 模型目录"
+      return 0
+    fi
+    CODEX_DIR="$CODEX_DIR" OUT="$MAGPIE_CATALOG" python3 - <<'PY'
+import json, os, pathlib, tempfile
+cache = pathlib.Path(os.environ['CODEX_DIR']) / 'models_cache.json'
+if not cache.exists():
+    raise SystemExit(f'找不到 Codex 模型缓存：{cache}')
+data = json.loads(cache.read_text())
+models = [m for m in data.get('models', []) if m.get('slug') == 'gpt-6-astra']
+if len(models) != 1:
+    raise SystemExit('Codex 模型缓存中没有唯一的 gpt-6-astra')
+out = pathlib.Path(os.environ['OUT'])
+out.parent.mkdir(parents=True, exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix='.magpie-models-', dir=str(out.parent))
+try:
+    with os.fdopen(fd, 'w') as f:
+        json.dump({'models': models}, f, ensure_ascii=False, separators=(',', ':'))
+        f.write('\n')
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, out)
+finally:
+    if os.path.exists(tmp): os.unlink(tmp)
+PY
+    ok "Codex 模型目录已限制为 gpt-6-astra"
+  }
+
+  magpie_config() {
+    [ -f "$CFG" ] || { err "找不到 $CFG"; return 1; }
+    local desired
+    desired=$(mktemp)
+    TMP_FILES="$TMP_FILES $desired"
+    CFG="$CFG" OUT="$desired" BASE="$MAGPIE_BASE" KEY="$MAGPIE_KEY" CATALOG="$MAGPIE_CATALOG" \
+      python3 - <<'PY'
+import os, re, tomllib
+
+cfg = os.environ['CFG']; out = os.environ['OUT']
+base = os.environ['BASE']; key = os.environ['KEY']
+catalog = os.environ['CATALOG']
+t = open(cfg).read()
+
+def set_kv(text, k, v):
+    pat = re.compile(rf'^{re.escape(k)} = .*$', re.M)
+    if pat.search(text):
+        return pat.sub(f'{k} = "{v}"', text, count=1)
+    return re.sub(r'^(model_provider = .*)$', rf'\1\n{k} = "{v}"', text, count=1, flags=re.M)
+
+t = set_kv(t, 'model_provider', 'main')
+t = set_kv(t, 'model', 'gpt-6-astra')
+t = set_kv(t, 'model_catalog_json', catalog)
+t = re.sub(r'^\[model_providers\.main\]\n(?:[^\[].*\n|\n)*', '', t, flags=re.M)
+t = t.rstrip('\n') + '\n\n[model_providers.main]\n' + '\n'.join([
+    'name = "main"',
+    'wire_api = "responses"',
+    'request_max_retries = 10',
+    'stream_max_retries = 10',
+    'requires_openai_auth = true',
+    f'base_url = "{base}"',
+    f'experimental_bearer_token = "{key}"',
+]) + '\n'
+tomllib.loads(t)
+open(out, 'w').write(t)
+PY
+    if cmp -s "$CFG" "$desired"; then
+      ok "Codex 已经指向 Magpie（main / gpt-6-astra）"
+      return 0
+    fi
+    if [ "$DRY" = "1" ]; then
+      skip "试运行：会更新 [model_providers.main] 指向 Magpie"
+      return 0
+    fi
+    local bk="$ROOT/backups/$TS-magpie"
+    mkdir -p "$bk"
+    cp "$CFG" "$bk/config.toml.before"
+    [ -f "$AUTH" ] && cp "$AUTH" "$bk/auth.json.before"
+    cp "$desired" "$CFG"
+    ok "config.toml 已更新（main → Magpie · gpt-6-astra）"
+  }
+
+  magpie_verify() {
+    [ "$VERIFY" = "1" ] || { skip "按参数跳过 Magpie 请求验证"; return 0; }
+    [ "$DRY" = "1" ] && { skip "试运行：会发送一条 gpt-6-astra 最小请求"; return 0; }
+    MAGPIE_BASE="$MAGPIE_BASE" MAGPIE_KEY="$MAGPIE_KEY" python3 - <<'PY'
+import json, os, urllib.request
+base = os.environ['MAGPIE_BASE'].rstrip('/')
+body = {'model':'gpt-6-astra','input':'Reply with exactly MAGPIE_OK.','store':False,'max_output_tokens':16}
+req = urllib.request.Request(base + '/responses', data=json.dumps(body).encode(),
+    headers={'Authorization':'Bearer ' + os.environ['MAGPIE_KEY'], 'Content-Type':'application/json'})
+with urllib.request.urlopen(req, timeout=60) as r:
+    data = json.loads(r.read().decode())
+text = ''.join(x.get('text','') for o in data.get('output',[]) for x in o.get('content',[]))
+if 'MAGPIE_OK' not in text:
+    raise SystemExit('响应未包含 MAGPIE_OK')
+print('MAGPIE_OK')
+PY
+    ok "Magpie Responses 验证成功"
+  }
+
+  step "Magpie 模式：检查并启动网关"
+  magpie_start || exit 70
+  step "同步上游和路由组"
+  magpie_sync || exit 71
+  magpie_route || exit 72
+  magpie_catalog || exit 73
+  step "固定 main Provider 指向 Magpie"
+  magpie_config || exit 74
+  step "验证"
+  magpie_verify || exit 75
+  if [ "$RESTART" = "1" ] && [ "$DRY" = "0" ]; then
+    osascript - "$CHATGPT_APP" >/dev/null 2>&1 <<'APPLESCRIPT'
+on run argv
+  tell application (item 1 of argv) to quit
+end run
+APPLESCRIPT
+    open -a "$CHATGPT_APP" >/dev/null 2>&1 || true
+    ok "ChatGPT 已请求重启"
+  fi
+  echo "═══════════════════════════════════════════════"
+  echo " ✅ Magpie 模式完成（main / gpt-6-astra，网关 ${MAGPIE_ADDR}，用时 $(elapsed)s）"
+  exit 0
+fi
 
 # ── 0) 供应商定义 ──────────────────────────────────────────────────────────
 if [ ! -f "$PROV_JSON" ]; then
@@ -251,7 +502,7 @@ fi
 DESIRED=$(mktemp); TMP_FILES="$TMP_FILES $DESIRED"
 CFG="$CFG" OUT="$DESIRED" PID_="$PROVIDER_ID" MODE="$P_MODE" MODEL="$P_MODEL" \
 EFFORT="$P_EFFORT" BASE="$P_BASE" OBASE="$OFFICIAL_BASE" WIRE="$P_WIRE" KEY="$P_KEY" \
-HASCHAT="$HAS_CHATGPT" LEGACY="$LEGACY" python3 <<'PY' || { err "config.toml 生成失败"; exit 68; }
+HASCHAT="$HAS_CHATGPT" LEGACY="$LEGACY" CATALOG="$MAGPIE_CATALOG" python3 <<'PY' || { err "config.toml 生成失败"; exit 68; }
 import os, re
 try:
     import tomllib
@@ -266,6 +517,7 @@ wire = os.environ['WIRE']; key = os.environ['KEY']
 has_chat = os.environ['HASCHAT'] == '1'; legacy = os.environ['LEGACY'] == '1'
 
 t = open(cfg_path).read()
+catalog = os.environ.get('CATALOG', '')
 
 def set_kv(text, k, v):
     pat = re.compile(rf'^{re.escape(k)} = .*$', re.M)
@@ -276,6 +528,11 @@ def set_kv(text, k, v):
 # 新版 Codex 已不识别该键（会被忽略并在每次运行时告警）
 t = re.sub(r'^disable_response_storage = .*\n', '', t, flags=re.M)
 
+# Magpie owns only its own catalog; direct mode removes that catalog reference
+# while preserving any user-managed model_catalog_json path.
+if catalog:
+    t = re.sub(rf'^model_catalog_json = "{re.escape(catalog)}"\n', '', t, flags=re.M)
+
 t = set_kv(t, 'model_provider', pid)
 t = set_kv(t, 'model', model)
 t = set_kv(t, 'model_reasoning_effort', effort)
@@ -285,6 +542,9 @@ t = re.sub(r'^\[model_providers\.[^\]]+\]\n(?:[^\[].*\n|\n)*', '', t, flags=re.M
 
 if not (legacy and mode == 'chatgpt'):
     fields = [f'name = "{pid}"', f'wire_api = "{wire}"']
+    # 失败自动重试次数统一设为 10（Codex 默认：stream_max_retries=5，request_max_retries=4）
+    fields.append('request_max_retries = 10')
+    fields.append('stream_max_retries = 10')
     fields.append(f'requires_openai_auth = {"true" if has_chat else "false"}')
     if mode == 'chatgpt':
         fields.append(f'base_url = "{obase}"')
@@ -755,10 +1015,9 @@ apply_verify_result() {
 }
 
 restart_app() {
-  local t0 i bin appname
+  local t0 i bin
   t0=$(date +%s)
   bin="$CHATGPT_APP/Contents/MacOS/$(basename "$CHATGPT_APP" .app)"
-  appname=$(basename "$CHATGPT_APP" .app)
   if ! pgrep -f "$bin" >/dev/null 2>&1; then
     if open -a "$CHATGPT_APP" >/dev/null 2>&1; then
       ok "ChatGPT 未在运行，已启动（$(( $(date +%s) - t0 ))s）"
@@ -767,7 +1026,12 @@ restart_app() {
     fi
     return 0
   fi
-  osascript -e "tell application \"$appname\" to quit" >/dev/null 2>&1
+  # 使用完整路径，避免退出同名的浏览器网页版 ChatGPT。
+  osascript - "$CHATGPT_APP" >/dev/null 2>&1 <<'APPLESCRIPT'
+on run argv
+  tell application (item 1 of argv) to quit
+end run
+APPLESCRIPT
   i=0
   # 这个 App 优雅退出可能要 10 秒以上；最多等 1.5 秒就强制结束（与旧版 sleep 2 + pkill 等效）
   while pgrep -f "$bin" >/dev/null 2>&1 && [ "$i" -lt 15 ]; do sleep 0.1; i=$((i + 1)); done
