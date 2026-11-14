@@ -214,7 +214,7 @@ PY
       if [ -n "$pid" ] && [[ "$cmd" == *"$MAGPIE_BIN serve"* ]]; then
         kill "$pid" 2>/dev/null || true
         rm -f "$MAGPIE_PID_FILE"
-        ok "已停止由 Switcher 启动的 Magpie（pid=$pid）"
+        ok "已停止由 Switcher 启动的 Magpie（pid=${pid}）"
       fi
     fi
   fi
@@ -254,7 +254,7 @@ if [ "$TARGET" = "magpie" ]; then
     printf '%s\n' "$pid" >"$MAGPIE_PID_FILE"
     for _ in $(seq 1 60); do
       if magpie_health; then
-        ok "Magpie 网关已启动（pid=$pid，$MAGPIE_ADDR）"
+        ok "Magpie 网关已启动（pid=${pid}，${MAGPIE_ADDR}）"
         return 0
       fi
       sleep 0.2
