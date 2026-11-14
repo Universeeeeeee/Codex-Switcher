@@ -118,8 +118,8 @@ if [ "$TARGET" = "magpie-off" ]; then
       cp "$latest" "$CFG"
       ok "已恢复 Magpie 之前的 config.toml"
     elif [ -n "$expected_hash" ]; then
-      BEFORE="$latest" CURRENT="$CFG" python3 - <<'PY'
-import os, re, tomllib
+      if ! BEFORE="$latest" CURRENT="$CFG" python3 - <<'PY'
+import json, os, re, tomllib
 before = os.environ['BEFORE']; current = os.environ['CURRENT']
 old = open(before).read(); cur = open(current).read()
 old_doc = tomllib.loads(old)
@@ -137,14 +137,38 @@ for key in ('model_provider', 'model', 'model_catalog_json'):
     value = old_doc.get(key)
     cur = set_kv(cur, key, value if isinstance(value, str) else None)
 
-match = re.search(r'^\[model_providers\.main\]\n(?:[^\[].*\n|\n)*', old, re.M)
-if not match:
+old_match = re.search(r'^\[model_providers\.main\]\n(?:[^\[].*\n|\n)*', old, re.M)
+cur_match = re.search(r'^\[model_providers\.main\]\n(?:[^\[].*\n|\n)*', cur, re.M)
+if not old_match or not cur_match:
     raise SystemExit('备份中没有 [model_providers.main]')
-cur = re.sub(r'^\[model_providers\.main\]\n(?:[^\[].*\n|\n)*', '', cur, flags=re.M)
-cur = cur.rstrip('\n') + '\n\n' + match.group(0).rstrip('\n') + '\n'
+old_block = old_match.group(0)
+cur_block = cur_match.group(0)
+old_table = old_doc.get('model_providers', {}).get('main', {})
+controlled = ('name', 'wire_api', 'request_max_retries', 'stream_max_retries',
+              'requires_openai_auth', 'base_url', 'experimental_bearer_token')
+
+def toml_value(value):
+    if isinstance(value, bool): return 'true' if value else 'false'
+    if isinstance(value, (int, float)): return str(value)
+    return json.dumps(value, ensure_ascii=False)
+
+for key in controlled:
+    pat = re.compile(rf'^{re.escape(key)} = .*\n', re.M)
+    if key in old_table:
+        line = f'{key} = {toml_value(old_table[key])}\n'
+        if pat.search(cur_block): cur_block = pat.sub(line, cur_block, count=1)
+        else: cur_block = cur_block.replace('\n', '\n' + line, 1)
+    else:
+        cur_block = pat.sub('', cur_block, count=1)
+
+cur = cur[:cur_match.start()] + cur_block + cur[cur_match.end():]
 tomllib.loads(cur)
 open(current, 'w').write(cur)
 PY
+      then
+        err "配置冲突恢复失败，保留当前 config.toml"
+        exit 77
+      fi
       ok "检测到配置冲突，仅恢复 Magpie 受控字段，保留其他手动修改"
     else
       err "无法安全回滚：缺少配置指纹，请手动比较 $latest 与当前 config.toml"
@@ -207,7 +231,8 @@ if [ "$TARGET" = "magpie" ]; then
 
   magpie_sync() {
     [ "$DRY" = "1" ] && { skip "试运行：会同步 georder/xfastapi 到 Magpie"; return 0; }
-    PROV_JSON="$PROV_JSON" MAGPIE_BIN="$MAGPIE_BIN" MAGPIE_CONFIG_DIR="$MAGPIE_CONFIG_DIR" python3 - <<'PY'
+    local sync_output
+    if ! sync_output=$(PROV_JSON="$PROV_JSON" MAGPIE_BIN="$MAGPIE_BIN" MAGPIE_CONFIG_DIR="$MAGPIE_CONFIG_DIR" python3 - <<'PY'
 import json, os, subprocess, sys
 
 prov = json.load(open(os.environ['PROV_JSON']))
@@ -242,6 +267,11 @@ for pid in ('georder', 'xfastapi'):
         raise SystemExit(result.returncode)
     print(pid)
 PY
+    ); then
+      err "georder/xfastapi 同步失败，保留原有 Magpie 配置"
+      return 1
+    fi
+    printf '%s\n' "$sync_output"
     ok "georder/xfastapi 已同步到 Magpie"
   }
 
@@ -302,8 +332,36 @@ PY
         err "无法启用 Magpie model-map 插件"; return 1;
       }
     fi
-    "$MAGPIE_BIN" plugin options model-map \
-      '{"mapping":{"gpt-6-astra":"group/codex-astra"}}' >/dev/null 2>&1 || {
+    local plugin_options
+    plugin_options=$(PLUGIN_JSON="$plugin_json" python3 - <<'PY'
+import json, os
+d = json.loads(os.environ['PLUGIN_JSON'])
+opts = {}
+for p in d.get('plugins', []):
+    if 'model-map' in p.get('spec', ''):
+        opts = p.get('options') or {}
+        break
+mapping = opts.get('mapping') if isinstance(opts.get('mapping'), dict) else {
+    k: v for k, v in opts.items() if k != 'keep_upstream_name'
+}
+mapping = dict(mapping)
+mapping['gpt-6-astra'] = 'group/codex-astra'
+opts['mapping'] = mapping
+print(json.dumps(opts, ensure_ascii=False, separators=(',', ':')))
+PY
+    ) || {
+      err "无法合并 Model Map 原有配置"
+      return 1
+    }
+    if [ "$DRY" = "0" ] && [ -f "$MAGPIE_CONFIG_DIR/plugins.json" ]; then
+      local plugin_backup="$ROOT/backups/$TS-magpie/plugins.json.before"
+      mkdir -p "$(dirname "$plugin_backup")"
+      cp "$MAGPIE_CONFIG_DIR/plugins.json" "$plugin_backup" || {
+        err "无法备份 Model Map 原有配置"
+        return 1
+      }
+    fi
+    "$MAGPIE_BIN" plugin options model-map "$plugin_options" >/dev/null 2>&1 || {
         err "无法配置 Magpie model-map 插件"; return 1;
       }
     ok "路由组已固定：main → georder → xfastapi（gpt-6-astra）"
@@ -314,7 +372,7 @@ PY
       skip "试运行：会生成只包含 gpt-6-astra 的 Codex 模型目录"
       return 0
     fi
-    CODEX_DIR="$CODEX_DIR" OUT="$MAGPIE_CATALOG" python3 - <<'PY'
+    if ! CODEX_DIR="$CODEX_DIR" OUT="$MAGPIE_CATALOG" python3 - <<'PY'
 import json, os, pathlib, tempfile
 cache = pathlib.Path(os.environ['CODEX_DIR']) / 'models_cache.json'
 if not cache.exists():
@@ -335,6 +393,14 @@ try:
 finally:
     if os.path.exists(tmp): os.unlink(tmp)
 PY
+    then
+      err "生成 Codex 模型目录失败，保留原有目录"
+      return 1
+    fi
+    [ -s "$MAGPIE_CATALOG" ] || {
+      err "生成的 Codex 模型目录为空"
+      return 1
+    }
     ok "Codex 模型目录已限制为 gpt-6-astra"
   }
 
@@ -343,7 +409,7 @@ PY
     local desired
     desired=$(mktemp)
     TMP_FILES="$TMP_FILES $desired"
-    CFG="$CFG" OUT="$desired" BASE="$MAGPIE_BASE" KEY="$MAGPIE_KEY" CATALOG="$MAGPIE_CATALOG" \
+    if ! CFG="$CFG" OUT="$desired" BASE="$MAGPIE_BASE" KEY="$MAGPIE_KEY" CATALOG="$MAGPIE_CATALOG" \
       python3 - <<'PY'
 import os, re, tomllib
 
@@ -374,6 +440,25 @@ t = t.rstrip('\n') + '\n\n[model_providers.main]\n' + '\n'.join([
 tomllib.loads(t)
 open(out, 'w').write(t)
 PY
+    then
+      err "生成 Magpie config.toml 失败，保留原始配置"
+      return 1
+    fi
+    if ! CONFIG_FILE="$desired" python3 - <<'PY'
+import os, tomllib
+path = os.environ['CONFIG_FILE']
+if not os.path.getsize(path):
+    raise SystemExit('临时配置为空')
+data = tomllib.load(open(path, 'rb'))
+if data.get('model_provider') != 'main':
+    raise SystemExit('model_provider 不是 main')
+if data.get('model_providers', {}).get('main', {}).get('base_url') != 'http://127.0.0.1:3425/v1':
+    raise SystemExit('main Provider base_url 不正确')
+PY
+    then
+      err "生成的 Magpie config.toml 未通过解析或约束校验"
+      return 1
+    fi
     if cmp -s "$CFG" "$desired"; then
       ok "Codex 已经指向 Magpie（main / gpt-6-astra）"
       return 0
@@ -384,7 +469,10 @@ PY
     fi
     local bk="$ROOT/backups/$TS-magpie"
     mkdir -p "$bk"
-    cp "$CFG" "$bk/config.toml.before"
+    cp "$CFG" "$bk/config.toml.before" || {
+      err "无法备份原始 config.toml"
+      return 1
+    }
     [ -f "$AUTH" ] && cp "$AUTH" "$bk/auth.json.before"
     cp "$desired" "$CFG" || {
       err "写入 config.toml 失败"

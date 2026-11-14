@@ -166,7 +166,7 @@ open /Applications/CodexSwitcher.app
 把 `georder` 和 `xfastapi` 同步为 `gpt-6-astra`，创建 `group/codex-astra` 顺序路由，
 并把固定的 `main` Provider 指向网关。Codex 的 `model_provider` 始终保持 `main`，因此不会产生新的会话桶。
 同时生成 `~/.codex-switcher/magpie-models.json`，让 Codex 原生模型列表只显示 `gpt-6-astra`。
-Switcher 会通过 `magpie plugin list --json` 检查并启用 Model Map 插件，并校验路由成员和顺序；首次启用 Magpie 时即使界面勾选跳过验证，也会发送一次真实请求。
+Switcher 会通过 `magpie plugin list --json` 检查并启用 Model Map 插件，合并并备份已有映射，并校验路由成员和顺序；首次启用 Magpie 时即使界面勾选跳过验证，也会发送一次真实请求。当前 Model Map 插件按模型名工作，因此 `gpt-6-astra` 的映射对经过该网关的请求全局生效。
 可用 `MAGPIE_BIN=/path/to/magpie` 指定 Magpie 可执行文件，`MAGPIE_CONFIG_DIR=/path/to/config` 指定 Magpie 配置目录。
 
 首次使用：**先在 Codex 桌面端用官方账号登录一次**，然后随便切一次（脚本会把登录态留存到 `~/.codex-switcher/auth/official.json`），之后三个通道之间就可以随便来回切。
