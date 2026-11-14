@@ -52,10 +52,12 @@ final class Switcher: ObservableObject {
            let file = try? JSONDecoder().decode(ProviderFile.self, from: data) {
             providers = file.providers
             providerId = file.providerId ?? "main"
+            let env = ProcessInfo.processInfo.environment
             let magpiePaths = [
+                env["MAGPIE_BIN"],
                 "\(NSHomeDirectory())/.local/bin/magpie",
                 "/Applications/magpie.app/Contents/MacOS/magpie"
-            ]
+            ].compactMap { $0 }
             if !providers.contains(where: { $0.id == "magpie" }),
                magpiePaths.contains(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
                 providers.append(Provider(
@@ -106,7 +108,7 @@ final class Switcher: ObservableObject {
         output = ""
         var args = [p.id]
         if autoRestart { args.append("--restart") }
-        if skipVerify { args.append("--no-verify") }
+        if skipVerify && p.mode != "magpie" { args.append("--no-verify") }
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/bash")

@@ -57,6 +57,8 @@ MAGPIE_KEY="${MAGPIE_KEY:-magpie}"
 MAGPIE_PID_FILE="$ROOT/magpie.pid"
 MAGPIE_LOG="$ROOT/logs/magpie-gateway.log"
 MAGPIE_CATALOG="$ROOT/magpie-models.json"
+MAGPIE_CONFIG_DIR="${MAGPIE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/magpie}"
+MAGPIE_BACKUP_CONFIG=""
 
 TARGET="${1:-}"
 if [ -z "$TARGET" ]; then
@@ -105,11 +107,49 @@ now_hm() { date '+%Y-%m-%d %H:%M'; }
 if [ "$TARGET" = "magpie-off" ]; then
   latest=$(find "$ROOT/backups" -type f -name 'config.toml.before' -path '*-magpie/*' 2>/dev/null | sort | tail -1)
   [ -n "$latest" ] || { err "找不到 Magpie 模式备份，无法自动回滚"; exit 75; }
+  latest_dir=$(dirname "$latest")
   if [ "$DRY" = "1" ]; then
     skip "试运行：会恢复 $(tildify "$latest")"
   else
-    cp "$latest" "$CFG"
-    ok "已恢复 Magpie 之前的 config.toml"
+    expected_file="$latest_dir/config.toml.after.sha256"
+    current_hash=$(shasum -a 256 "$CFG" 2>/dev/null | awk '{print $1}')
+    expected_hash=$(cat "$expected_file" 2>/dev/null || true)
+    if [ -n "$expected_hash" ] && [ "$current_hash" = "$expected_hash" ]; then
+      cp "$latest" "$CFG"
+      ok "已恢复 Magpie 之前的 config.toml"
+    elif [ -n "$expected_hash" ]; then
+      BEFORE="$latest" CURRENT="$CFG" python3 - <<'PY'
+import os, re, tomllib
+before = os.environ['BEFORE']; current = os.environ['CURRENT']
+old = open(before).read(); cur = open(current).read()
+old_doc = tomllib.loads(old)
+
+def set_kv(text, k, value):
+    pat = re.compile(rf'^{re.escape(k)} = .*$', re.M)
+    if value is None:
+        return pat.sub('', text, count=1)
+    line = f'{k} = "{value}"'
+    if pat.search(text):
+        return pat.sub(line, text, count=1)
+    return re.sub(r'^(model_provider = .*)$', rf'\1\n{line}', text, count=1, flags=re.M)
+
+for key in ('model_provider', 'model', 'model_catalog_json'):
+    value = old_doc.get(key)
+    cur = set_kv(cur, key, value if isinstance(value, str) else None)
+
+match = re.search(r'^\[model_providers\.main\]\n(?:[^\[].*\n|\n)*', old, re.M)
+if not match:
+    raise SystemExit('备份中没有 [model_providers.main]')
+cur = re.sub(r'^\[model_providers\.main\]\n(?:[^\[].*\n|\n)*', '', cur, flags=re.M)
+cur = cur.rstrip('\n') + '\n\n' + match.group(0).rstrip('\n') + '\n'
+tomllib.loads(cur)
+open(current, 'w').write(cur)
+PY
+      ok "检测到配置冲突，仅恢复 Magpie 受控字段，保留其他手动修改"
+    else
+      err "无法安全回滚：缺少配置指纹，请手动比较 $latest 与当前 config.toml"
+      exit 76
+    fi
     if [ -f "$MAGPIE_PID_FILE" ]; then
       pid=$(cat "$MAGPIE_PID_FILE" 2>/dev/null || true)
       cmd=$(ps -p "$pid" -o command= 2>/dev/null || true)
@@ -167,20 +207,28 @@ if [ "$TARGET" = "magpie" ]; then
 
   magpie_sync() {
     [ "$DRY" = "1" ] && { skip "试运行：会同步 georder/xfastapi 到 Magpie"; return 0; }
-    PROV_JSON="$PROV_JSON" MAGPIE_BIN="$MAGPIE_BIN" python3 - <<'PY'
+    PROV_JSON="$PROV_JSON" MAGPIE_BIN="$MAGPIE_BIN" MAGPIE_CONFIG_DIR="$MAGPIE_CONFIG_DIR" python3 - <<'PY'
 import json, os, subprocess, sys
 
 prov = json.load(open(os.environ['PROV_JSON']))
 magpie = os.environ['MAGPIE_BIN']
-catalog = subprocess.run([magpie, 'models'], text=True, capture_output=True, timeout=45).stdout
+saved = {}
+saved_path = os.path.join(os.environ['MAGPIE_CONFIG_DIR'], 'providers.json')
+try:
+    saved = {x.get('id'): x for x in json.load(open(saved_path)).get('providers', [])}
+except (FileNotFoundError, json.JSONDecodeError):
+    pass
 for pid in ('georder', 'xfastapi'):
     p = next((x for x in prov.get('providers', []) if x.get('id') == pid), None)
     if not p or not p.get('baseUrl') or not p.get('apiKey'):
         print(f'{pid}: providers.json 缺少 baseUrl/apiKey', file=sys.stderr)
         raise SystemExit(1)
-    if f'{pid}/gpt-6-astra' in catalog:
-        args = [magpie, 'provider', 'key', pid, p['apiKey']]
-        result = subprocess.run(args, text=True, capture_output=True, timeout=45)
+    if pid in saved:
+        result = subprocess.run([magpie, 'provider', 'key', pid, p['apiKey']],
+                                text=True, capture_output=True, timeout=45)
+        if result.returncode == 0 and saved[pid].get('chat', '') != p['baseUrl']:
+            result = subprocess.run([magpie, 'provider', 'set', pid, 'url=' + p['baseUrl']],
+                                    text=True, capture_output=True, timeout=45)
         if result.returncode == 0:
             result = subprocess.run([magpie, 'provider', 'models', pid, 'gpt-6-astra'],
                                     text=True, capture_output=True, timeout=45)
@@ -202,15 +250,56 @@ PY
       skip "试运行：会确保 group/codex-astra 与 model-map 映射"
       return 0
     fi
-    "$MAGPIE_BIN" group set codex-astra \
+    if ! "$MAGPIE_BIN" group set codex-astra \
       models=codex/gpt-6-astra,georder/gpt-6-astra,xfastapi/gpt-6-astra \
-      routing=order stays=session >/dev/null 2>&1 \
-      || "$MAGPIE_BIN" group add "Codex Astra" \
+      routing=order stays=session >/dev/null 2>&1; then
+      if ! "$MAGPIE_BIN" group add "Codex Astra" \
         models=codex/gpt-6-astra,georder/gpt-6-astra,xfastapi/gpt-6-astra \
-        routing=order stays=session >/dev/null 2>&1
-    if ! rg -q 'middleware-model-map|model-map' "$HOME/.config/magpie/plugins.yml" 2>/dev/null; then
+        routing=order stays=session >/dev/null 2>&1; then
+        err "无法创建或更新 group/codex-astra"
+        return 1
+      fi
+    fi
+    local route
+    route=$("$MAGPIE_BIN" group codex-astra 2>/dev/null) || {
+      err "无法读取 group/codex-astra"
+      return 1
+    }
+    ROUTE="$route" python3 - <<'PY'
+import os, re
+s = os.environ['ROUTE']
+expected = ['codex/gpt-6-astra', 'georder/gpt-6-astra', 'xfastapi/gpt-6-astra']
+if not re.search(r'routing\s+order', s):
+    raise SystemExit('routing 不是 order')
+pos = [s.find(x) for x in expected]
+if any(x < 0 for x in pos) or pos != sorted(pos):
+    raise SystemExit('路由成员或顺序不匹配')
+PY
+    if [ "$?" -ne 0 ]; then
+      err "group/codex-astra 成员或顺序校验失败"
+      return 1
+    fi
+    local plugin_json
+    plugin_json=$("$MAGPIE_BIN" plugin list --json 2>/dev/null) || {
+      err "无法读取 Magpie 插件状态"
+      return 1
+    }
+    plugin_state=$(PLUGIN_JSON="$plugin_json" python3 - <<'PY'
+import json, os
+d = json.loads(os.environ['PLUGIN_JSON'])
+specs = [x.get('spec', '') for x in d.get('plugins', [])]
+loaded = d.get('middleware', {})
+print('installed' if any('middleware-model-map' in x or 'model-map' in x for x in specs) else 'missing')
+print('enabled' if any('model-map' in x for x in loaded) else 'disabled')
+PY
+)
+    if [[ "$plugin_state" == *missing* ]]; then
       "$MAGPIE_BIN" plugin add @magpie-community/middleware-model-map >/dev/null 2>&1 || {
         err "无法安装 Magpie model-map 插件"; return 1;
+      }
+    elif [[ "$plugin_state" == *disabled* ]]; then
+      "$MAGPIE_BIN" plugin on model-map >/dev/null 2>&1 || {
+        err "无法启用 Magpie model-map 插件"; return 1;
       }
     fi
     "$MAGPIE_BIN" plugin options model-map \
@@ -297,14 +386,20 @@ PY
     mkdir -p "$bk"
     cp "$CFG" "$bk/config.toml.before"
     [ -f "$AUTH" ] && cp "$AUTH" "$bk/auth.json.before"
-    cp "$desired" "$CFG"
+    cp "$desired" "$CFG" || {
+      err "写入 config.toml 失败"
+      return 1
+    }
+    shasum -a 256 "$CFG" | awk '{print $1}' >"$bk/config.toml.after.sha256"
+    MAGPIE_BACKUP_CONFIG="$bk/config.toml.before"
     ok "config.toml 已更新（main → Magpie · gpt-6-astra）"
   }
 
   magpie_verify() {
     [ "$VERIFY" = "1" ] || { skip "按参数跳过 Magpie 请求验证"; return 0; }
     [ "$DRY" = "1" ] && { skip "试运行：会发送一条 gpt-6-astra 最小请求"; return 0; }
-    MAGPIE_BASE="$MAGPIE_BASE" MAGPIE_KEY="$MAGPIE_KEY" python3 - <<'PY'
+    local result
+    if ! result=$(MAGPIE_BASE="$MAGPIE_BASE" MAGPIE_KEY="$MAGPIE_KEY" python3 - <<'PY'
 import json, os, urllib.request
 base = os.environ['MAGPIE_BASE'].rstrip('/')
 body = {'model':'gpt-6-astra','input':'Reply with exactly MAGPIE_OK.','store':False,'max_output_tokens':16}
@@ -317,6 +412,15 @@ if 'MAGPIE_OK' not in text:
     raise SystemExit('响应未包含 MAGPIE_OK')
 print('MAGPIE_OK')
 PY
+    ); then
+      err "Magpie Responses 验证失败"
+      if [ -n "$MAGPIE_BACKUP_CONFIG" ] && [ -f "$MAGPIE_BACKUP_CONFIG" ]; then
+        cp "$MAGPIE_BACKUP_CONFIG" "$CFG"
+        warn "已回滚本次 Magpie 配置修改"
+      fi
+      return 1
+    fi
+    printf '%s\n' "$result"
     ok "Magpie Responses 验证成功"
   }
 
