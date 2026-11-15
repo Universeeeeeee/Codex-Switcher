@@ -452,7 +452,7 @@ with urllib.request.urlopen(req, timeout=30) as r:
 known = {m.get('slug') for m in models}
 template = next(m for m in models if m.get('slug') == 'gpt-6-astra')
 for own in models:
-    own['display_name'] = 'Codex · ' + (own.get('display_name') or own.get('slug', ''))
+    own['display_name'] = '内置 · ' + (own.get('display_name') or own.get('slug', ''))
 for item in remote:
     slug = item.get('id', '')
     if not slug or slug in known or slug in ('auto/gpt-6-astra', 'group/codex-astra'):
