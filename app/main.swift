@@ -47,6 +47,7 @@ final class Switcher: ObservableObject {
         return (home as NSString).appendingPathComponent("config.toml")
     }
     private var providerId = "main"
+    private var refreshingRoute = false
 
     func load() {
         if let data = try? Data(contentsOf: URL(fileURLWithPath: "\(root)/providers.json")),
@@ -105,7 +106,8 @@ final class Switcher: ObservableObject {
     }
 
     private func refreshMagpieStatus() {
-        guard FileManager.default.fileExists(atPath: script) else { return }
+        guard !refreshingRoute, FileManager.default.fileExists(atPath: script) else { return }
+        refreshingRoute = true
         DispatchQueue.global(qos: .utility).async {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -117,9 +119,9 @@ final class Switcher: ObservableObject {
                 try task.run()
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let text = String(data: data, encoding: .utf8) ?? ""
-                DispatchQueue.main.async { self.routeStatus = text.trimmingCharacters(in: .whitespacesAndNewlines) }
+                DispatchQueue.main.async { self.refreshingRoute = false; self.routeStatus = text.trimmingCharacters(in: .whitespacesAndNewlines) }
             } catch {
-                DispatchQueue.main.async { self.routeStatus = "" }
+                DispatchQueue.main.async { self.refreshingRoute = false; self.routeStatus = "状态读取失败" }
             }
         }
     }
@@ -269,6 +271,9 @@ struct ContentView: View {
         .padding(16)
         .frame(width: 480)
         .onAppear { switcher.load() }
+        .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
+            switcher.refresh()
+        }
     }
 }
 

@@ -149,12 +149,16 @@ def get(path):
         return json.loads(r.read().decode())
 try:
     rows = get('usage/requests').get('rows', [])
-    row = next((x for x in rows if x.get('status', 500) < 400), rows[0] if rows else {})
+    rows = [x for x in rows if x.get('agent') == 'codex'
+            and x.get('source') != 'probe' and x.get('kind') != 'provider_test'
+            and 200 <= x.get('status', 0) < 300]
+    row = max(rows, key=lambda x: x.get('t', ''), default={})
     if row:
-        print(f"当前渠道: {row.get('providerName') or row.get('provider')} · {row.get('model')} · {row.get('t')}")
-        print(f"路由: {row.get('req', '-')} → {row.get('served', '-')}, 状态 {row.get('status', '-')}")
+        print(f"最近完成的 Codex 请求渠道: {row.get('providerName') or row.get('provider')} · {row.get('model')} · {row.get('t')}")
+        print(f"会话: {row.get('session') or row.get('native_session') or '未知'}")
+        print('以上为网关中的历史记录，不代表当前打开会话的实时渠道')
     else:
-        print('当前渠道: 暂无请求记录')
+        print('最近完成的 Codex 请求渠道: 暂无成功记录')
     quotas = get('quotas').get('data', [])
     print('额度:')
     for q in quotas:
