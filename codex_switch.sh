@@ -106,6 +106,10 @@ now_hm() { date '+%Y-%m-%d %H:%M'; }
 # ── Magpie 当前渠道和额度 ───────────────────────────────────────────────────
 if [ "$TARGET" = "magpie-status" ]; then
   [ -x "$MAGPIE_BIN" ] || { err "找不到 Magpie：$MAGPIE_BIN"; exit 80; }
+  if ! "$MAGPIE_BIN" healthcheck --addr "$MAGPIE_ADDR" >/dev/null 2>&1; then
+    echo "Magpie 网关未运行；当前可继续使用直连 Provider"
+    exit 0
+  fi
   MAGPIE_ADDR="$MAGPIE_ADDR" MAGPIE_KEY="$MAGPIE_KEY" python3 - <<'PY'
 import json, os, urllib.request
 base = 'http://' + os.environ['MAGPIE_ADDR'] + '/v1/magpie/'
