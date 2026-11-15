@@ -345,10 +345,10 @@ PY
       return 0
     fi
     if ! "$MAGPIE_BIN" group set codex-astra \
-      models=codex/gpt-6-astra,georder/gpt-6-astra,xfastapi/gpt-6-astra \
+      models=georder/gpt-6-astra,codex/gpt-6-astra,xfastapi/gpt-6-astra \
       routing=order stays=session >/dev/null 2>&1; then
       if ! "$MAGPIE_BIN" group add "Codex Astra" \
-        models=codex/gpt-6-astra,georder/gpt-6-astra,xfastapi/gpt-6-astra \
+        models=georder/gpt-6-astra,codex/gpt-6-astra,xfastapi/gpt-6-astra \
         routing=order stays=session >/dev/null 2>&1; then
         err "无法创建或更新 group/codex-astra"
         return 1
@@ -362,7 +362,7 @@ PY
     ROUTE="$route" python3 - <<'PY'
 import os, re
 s = os.environ['ROUTE']
-expected = ['codex/gpt-6-astra', 'georder/gpt-6-astra', 'xfastapi/gpt-6-astra']
+expected = ['georder/gpt-6-astra', 'codex/gpt-6-astra', 'xfastapi/gpt-6-astra']
 if not re.search(r'routing\s+order', s):
     raise SystemExit('routing 不是 order')
 pos = [s.find(x) for x in expected]
@@ -428,7 +428,7 @@ PY
     "$MAGPIE_BIN" plugin options model-map "$plugin_options" >/dev/null 2>&1 || {
         err "无法配置 Magpie model-map 插件"; return 1;
       }
-    ok "路由组已固定：main → georder → xfastapi（gpt-6-astra）"
+    ok "路由组已固定：georder → main → xfastapi（gpt-6-astra）"
   }
 
   magpie_catalog() {
