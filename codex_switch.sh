@@ -468,7 +468,16 @@ for item in remote:
         clone['context_window'] = item['context_window']
     models.append(clone)
     known.add(slug)
-models.sort(key=lambda m: (0 if m.get('slug') == 'gpt-6-astra' else 1, m.get('display_name', '')))
+def model_order(m):
+    slug = m.get('slug', '')
+    source, name = slug.split('/', 1) if '/' in slug else ('codex', slug)
+    preferred = {'gpt-6.1-sol': 0, 'gpt-6-astra': 1}
+    return (0 if name in preferred else 1,
+            {'codex': 0, 'georder': 1, 'xfastapi': 2}.get(source, 3),
+            preferred.get(name, 2), m.get('display_name', ''))
+models.sort(key=model_order)
+for priority, model in enumerate(models):
+    model['priority'] = priority
 out = pathlib.Path(os.environ['OUT'])
 out.parent.mkdir(parents=True, exist_ok=True)
 fd, tmp = tempfile.mkstemp(prefix='.magpie-models-', dir=str(out.parent))
