@@ -155,7 +155,7 @@ cd Codex-Switcher
 ~/.codex-switcher/codex_switch.sh relay-a              # 切换
 ~/.codex-switcher/codex_switch.sh official --restart   # 切换并自动重启 Codex
 ~/.codex-switcher/codex_switch.sh relay-a --dry-run    # 只看会改什么，不写入
-~/.codex-switcher/codex_switch.sh magpie --restart     # Magpie 路由：georder → main → xfastapi
+~/.codex-switcher/codex_switch.sh magpie --restart     # Magpie：按用户选择的模型来源直连
 ~/.codex-switcher/codex_switch.sh magpie-off --restart # 恢复 Magpie 之前的直连配置
 ~/.codex-switcher/codex_switch.sh magpie-status       # 查看当前实际渠道和额度
 

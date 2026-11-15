@@ -409,7 +409,7 @@ mapping = opts.get('mapping') if isinstance(opts.get('mapping'), dict) else {
     k: v for k, v in opts.items() if k != 'keep_upstream_name'
 }
 mapping = dict(mapping)
-mapping['gpt-6-astra'] = 'group/codex-astra'
+mapping['gpt-6-astra'] = 'codex/gpt-6-astra'
 opts['mapping'] = mapping
 print(json.dumps(opts, ensure_ascii=False, separators=(',', ':')))
 PY
@@ -428,7 +428,7 @@ PY
     "$MAGPIE_BIN" plugin options model-map "$plugin_options" >/dev/null 2>&1 || {
         err "无法配置 Magpie model-map 插件"; return 1;
       }
-    ok "路由组已固定：georder → main → xfastapi（gpt-6-astra）"
+    ok "来源模型已固定：默认 Astra → Codex；georder/xfastapi 按用户选择直连"
   }
 
   magpie_catalog() {
