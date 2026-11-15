@@ -103,6 +103,35 @@ tildify() { printf '%s' "${1/#$HOME/~}"; }
 elapsed() { echo $(( $(date +%s) - T0 )); }
 now_hm() { date '+%Y-%m-%d %H:%M'; }
 
+# 可被 Magpie 分支和直连分支共同调用的桌面端重启函数。
+restart_app() {
+  local t0 i bin oerr
+  t0=$(date +%s)
+  bin="$CHATGPT_APP/Contents/MacOS/$(basename "$CHATGPT_APP" .app)"
+  if ! pgrep -f "$bin" >/dev/null 2>&1; then
+    open -a "$CHATGPT_APP" >/dev/null 2>&1 && ok "ChatGPT 已启动" || warn "启动 ChatGPT 失败，请手动打开"
+    return 0
+  fi
+  osascript - "$CHATGPT_APP" >/dev/null 2>&1 <<'APPLESCRIPT'
+on run argv
+  tell application (item 1 of argv) to quit
+end run
+APPLESCRIPT
+  i=0
+  while pgrep -f "$bin" >/dev/null 2>&1 && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+  if pgrep -f "$bin" >/dev/null 2>&1; then
+    pkill -f "$bin" >/dev/null 2>&1 || true
+    i=0
+    while pgrep -f "$bin" >/dev/null 2>&1 && [ "$i" -lt 30 ]; do sleep 0.1; i=$((i + 1)); done
+  fi
+  i=0; oerr=""
+  while [ "$i" -lt 8 ]; do
+    oerr=$(open -a "$CHATGPT_APP" 2>&1) && { ok "ChatGPT 已重启（$(( $(date +%s) - t0 ))s）"; return 0; }
+    i=$((i + 1)); sleep 0.5
+  done
+  warn "已退出但启动失败（${oerr:-未知错误}），请手动打开"
+}
+
 # ── Magpie 当前渠道和额度 ───────────────────────────────────────────────────
 if [ "$TARGET" = "magpie-status" ]; then
   [ -x "$MAGPIE_BIN" ] || { err "找不到 Magpie：$MAGPIE_BIN"; exit 80; }
@@ -223,13 +252,7 @@ PY
     fi
   fi
   if [ "$RESTART" = "1" ] && [ "$DRY" = "0" ]; then
-    osascript - "$CHATGPT_APP" >/dev/null 2>&1 <<'APPLESCRIPT'
-on run argv
-  tell application (item 1 of argv) to quit
-end run
-APPLESCRIPT
-    open -a "$CHATGPT_APP" >/dev/null 2>&1 || true
-    ok "ChatGPT 已请求重启"
+    restart_app
   fi
   exit 0
 fi
@@ -588,13 +611,7 @@ PY
   step "验证"
   magpie_verify || exit 75
   if [ "$RESTART" = "1" ] && [ "$DRY" = "0" ]; then
-    osascript - "$CHATGPT_APP" >/dev/null 2>&1 <<'APPLESCRIPT'
-on run argv
-  tell application (item 1 of argv) to quit
-end run
-APPLESCRIPT
-    open -a "$CHATGPT_APP" >/dev/null 2>&1 || true
-    ok "ChatGPT 已请求重启"
+    restart_app
   fi
   echo "═══════════════════════════════════════════════"
   echo " ✅ Magpie 模式完成（main / gpt-6-astra，网关 ${MAGPIE_ADDR}，用时 $(elapsed)s）"
@@ -1269,47 +1286,6 @@ apply_verify_result() {
       warn "验证未通过（${secs}s）：${msg}"
       return 1 ;;
   esac
-}
-
-restart_app() {
-  local t0 i bin
-  t0=$(date +%s)
-  bin="$CHATGPT_APP/Contents/MacOS/$(basename "$CHATGPT_APP" .app)"
-  if ! pgrep -f "$bin" >/dev/null 2>&1; then
-    if open -a "$CHATGPT_APP" >/dev/null 2>&1; then
-      ok "ChatGPT 未在运行，已启动（$(( $(date +%s) - t0 ))s）"
-    else
-      warn "启动 ChatGPT 失败，请手动打开"
-    fi
-    return 0
-  fi
-  # 使用完整路径，避免退出同名的浏览器网页版 ChatGPT。
-  osascript - "$CHATGPT_APP" >/dev/null 2>&1 <<'APPLESCRIPT'
-on run argv
-  tell application (item 1 of argv) to quit
-end run
-APPLESCRIPT
-  i=0
-  # 这个 App 优雅退出可能要 10 秒以上；最多等 1.5 秒就强制结束（与旧版 sleep 2 + pkill 等效）
-  while pgrep -f "$bin" >/dev/null 2>&1 && [ "$i" -lt 15 ]; do sleep 0.1; i=$((i + 1)); done
-  if pgrep -f "$bin" >/dev/null 2>&1; then
-    pkill -f "$bin" >/dev/null 2>&1
-    i=0
-    while pgrep -f "$bin" >/dev/null 2>&1 && [ "$i" -lt 20 ]; do sleep 0.1; i=$((i + 1)); done
-  fi
-  # 刚强杀后 LaunchServices 偶尔会短暂拒绝启动，重试几次
-  i=0
-  local oerr=""
-  while [ "$i" -lt 5 ]; do
-    oerr=$(open -a "$CHATGPT_APP" 2>&1) && break
-    i=$((i + 1))
-    sleep 0.4
-  done
-  if [ "$i" -lt 5 ]; then
-    ok "ChatGPT 已重启（$(( $(date +%s) - t0 ))s）"
-  else
-    warn "已退出但启动失败（${oerr:-未知错误}），请手动打开"
-  fi
 }
 
 VERIFY_FAILED=0
