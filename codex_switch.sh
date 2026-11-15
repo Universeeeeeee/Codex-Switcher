@@ -428,6 +428,8 @@ with urllib.request.urlopen(req, timeout=30) as r:
     remote = json.loads(r.read().decode()).get('data', [])
 known = {m.get('slug') for m in models}
 template = next(m for m in models if m.get('slug') == 'gpt-6-astra')
+for own in models:
+    own['display_name'] = 'Codex · ' + (own.get('display_name') or own.get('slug', ''))
 for item in remote:
     slug = item.get('id', '')
     if not slug or slug in known or slug in ('auto/gpt-6-astra', 'group/codex-astra'):
@@ -436,12 +438,14 @@ for item in remote:
         continue
     clone = copy.deepcopy(template)
     clone['slug'] = slug
-    clone['display_name'] = item.get('display_name') or slug
+    provider = slug.split('/', 1)[0]
+    clone['display_name'] = provider + ' · ' + (item.get('display_name') or slug.split('/', 1)[-1])
     clone['description'] = 'Magpie upstream: ' + slug
     if item.get('context_window'):
         clone['context_window'] = item['context_window']
     models.append(clone)
     known.add(slug)
+models.sort(key=lambda m: (0 if m.get('slug') == 'gpt-6-astra' else 1, m.get('display_name', '')))
 out = pathlib.Path(os.environ['OUT'])
 out.parent.mkdir(parents=True, exist_ok=True)
 fd, tmp = tempfile.mkstemp(prefix='.magpie-models-', dir=str(out.parent))
