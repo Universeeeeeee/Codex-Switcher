@@ -36,6 +36,26 @@
 # ============================================================================
 set -uo pipefail
 
+# Finder-launched apps may only see macOS Python 3.9. Resolve one interpreter
+# with the TOML standard library before any configuration or gateway mutation.
+SWITCHER_PYTHON=""
+if [ -n "${CODEX_SWITCHER_PYTHON:-}" ]; then
+  python_candidates=("$CODEX_SWITCHER_PYTHON")
+else
+  python_candidates=("$(command -v python3 || true)" /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3)
+fi
+for candidate in "${python_candidates[@]}"; do
+  if [ -x "$candidate" ] && "$candidate" -c 'import tomllib' >/dev/null 2>&1; then
+    SWITCHER_PYTHON="$candidate"
+    break
+  fi
+done
+if [ -z "$SWITCHER_PYTHON" ]; then
+  echo "❌ 需要支持 tomllib 的 Python 3.11+。请安装新版 Python，或通过 CODEX_SWITCHER_PYTHON 指定路径。" >&2
+  exit 69
+fi
+python3() { "$SWITCHER_PYTHON" "$@"; }
+
 ROOT="${CODEX_SWITCHER_HOME:-$HOME/.codex-switcher}"
 PROV_JSON="$ROOT/providers.json"
 CFG="${CODEX_HOME:-$HOME/.codex}/config.toml"
