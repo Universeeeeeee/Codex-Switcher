@@ -1,113 +1,14 @@
 # Codex Switcher
 
-> 在 Codex 里一键切换上游（官方 / 各种中继），**但 provider id 永不变 —— 会话历史永远在同一个列表里。**
+在 macOS 上一键切换 Codex 的官方账号和 API 中继。默认固定 `model_provider = "main"`，让历史会话留在同一个列表里。
 
-[English](README.en.md) · [三条优势](#为什么选它三条) · [与 magpie / cc-switch 对比](#与-magpie--cc-switch-对比) · [安装](#安装)
+[English](README.en.md) · [安装](#安装) · [使用](#使用) · [排错](docs/troubleshooting.md)
 
-macOS · 一个 bash 脚本 + 一个 250 KB 的原生小窗口 · 无网关、无常驻服务 · MIT
-
-![Codex Switcher 界面](docs/images/app-window.png)
-
-<sub>现在一次切换只有 3 步（检查+备份 → 应用 → 验证+重启），正常 2–10 秒；已经在该通道时直接秒退：</sub>
-
-```text
-▶ 1/3 检查 & 备份
-  ✅ config.toml 可解析 · 当前 provider=main / auth=chatgpt · 会话 661 条
-  ✅ 已备份 config/auth → ~/.codex-switcher/backups/20261020_144453-official
-
-▶ 2/3 应用
-  ✅ 登录态有效（token 剩余 10.0 天），无需刷新
-  ✅ config.toml 已更新（官方后端 …/backend-api/codex · gpt-6.1-sol / high）
-  ✅ 历史标签一致（661 条） · cc-switch 已同步
-
-▶ 3/3 验证 & 重启
-  ✅ 真实请求成功（模型回复 OK，6.8s）—— 该通道当前可用
-  ✅ ChatGPT 已重启（2s）
-═══════════════════════════════════════════════
- ✅ 已切换到「邮箱登录（官方）」· 用时 9s
-```
-
-再点一次同一个通道（或已经在该通道）不会重复做上面这些：备份、写入、验证、重启全部跳过，0.1 秒返回「无需切换」。
-
-```text
-▶ 4/9 生成 config.toml
-  provider=main | model=gpt-6-astra | effort=high | 中继 https://<你的中继> | 保留 ChatGPT 登录
-  ✅ config.toml 已更新
-  ✅ 已确认 provider 段存在（不会再出现 'Model provider not found'）
-
-▶ 5/9 会话历史桶 -> main
-  ✅ 标签已一致（647 条），无需改写        ← 固定 id 之后，从第二次起就不用再改写
-
-▶ 7/9 端到端验证
-  ✅ 真实请求成功（模型回复 OK）—— 该通道当前可用
-```
-
----
-
-## 为什么选它：三条
-
-1. **分桶问题今天就能解决。** magpie 的方案更完整但还在 issue 阶段；cc-switch 不处理这件事。本项目用「固定 provider id」从源头消除分桶——而且必要时提供**一次性**历史迁移（`threads.model_provider` + 会话文件里的 `model_provider` / `model_provider_id` 一起改，含 `….jsonl_副本` 这类容易漏掉的文件）。
-2. **直连模式零常驻依赖。** Codex 可以直接连官方后端或中继；需要自动路由时再启用可选的 Magpie 网关模式。
-3. **切换即自证，坏了会自修。** 每次切换后会**直接按 Codex 的协议发一条最小真实请求**（不再启动整个 `codex exec`，正常 6–10 秒而不是 30–90 秒），上游额度耗尽会明确报出来而不是静默失败；2 分钟内刚验证通过的通道不会重复请求。想看最接近真实会话的验证，用 `--verify-cli`。同时每次运行都检查 `model_provider` 指向的 `[model_providers.*]` 表是否存在——这正是 Codex 报 `Model provider not found` 的原因。
-
-## 与 magpie / cc-switch 对比
-
-| | **Codex Switcher**（本项目） | [cc-switch](https://github.com/farion1231/cc-switch) | [magpie](https://github.com/yetone/magpie) |
-|---|---|---|---|
-| 定位 | 只干一件事：Codex 换上游但历史不分桶 | 多 CLI 的供应商配置切换（GUI） | 所有 Agent 的模型 / 供应商 / 账号统一管理 |
-| 界面 | 原生小窗口（3 个按钮） | GUI | 菜单栏 + 窗口 + TUI + CLI |
-| **会话历史是否分桶** | ✅ **永不**（直连和 Magpie 都固定 `main`） | ❌ 切换后另一个桶的会话看不到¹ | 取决于 Agent 接入方式 |
-| 保留 ChatGPT 登录 | ✅ 中继通道也保留（可选退回 apikey） | 可配置保留 | ✅ 明确「不触碰登录」 |
-| 切换后是否验证真的可用 | ✅ **每次都真发一次请求**（`codex exec --ephemeral`，不落盘） | ❌ 无 | ⚠️ 有网关侧健康检查，不校验 Codex 端到端 |
-| 配置被改坏时自修复 | ✅ 每次运行检测 `model_provider` 指向的表是否存在，缺失即补 | ❌ | ✅ 文档明确会补回 |
-| 运行依赖 | 直连模式无；Magpie 模式使用本地网关 | GUI 应用 | **本地网关** 127.0.0.1:3425 |
-| 体量 / 可审计 | ~450 行 bash + ~250 行 Swift，纯文本 | GUI | 大型项目（多语言、插件、路由） |
-
-¹ 我们在 macOS + Codex 桌面端上的实测：用 cc-switch 切换供应商后，Codex 侧的历史桶标签没有跟着变，于是侧边栏只剩下与新 provider 匹配的那一个桶（我们那次是 647 条里只看得到 1 条）。cc-switch 的定位是管理 `config.toml` / `auth.json`，会话标签不在它的职责范围内。
-
-### 什么时候该用别的
-
-- 你要**多 Agent、多账号、额度用尽自动换号**、想让中继模型出现在 Codex 自带模型列表里 → 用 **magpie**，它比本项目强得多。
-- 你主要切 Claude Code 的配置 → 用 **cc-switch**。
-- 你只关心「Codex 换上游时历史别乱」 → 本项目。
-
----
-
-## 它解决的问题
-
-Codex（以及 ChatGPT 桌面端里的 Codex）**按 `model_provider` 给历史会话分桶**：用哪个 provider id 聊的，会话就挂在哪个桶里，侧边栏只列当前 provider 的桶。
-
-于是只要你切过上游（官方 ↔ 中继，或者从中继 A 换到中继 B），就会遇到：
-
-- 切过去之后，**原来那边的会话像是"消失"了**（其实还在，只是在另一个桶里）；
-- 从别的工具迁过来的历史挂在 `custom`、`main` 之类的旧 id 下，同样看不到；
-- 配置被改坏成 `model_provider = "xxx"` 但没有 `[model_providers.xxx]` 段时，Codex 直接**打不开这个会话**：
-
-  > ChatGPT 无法加载 config.toml …… Model provider `custom` not found
-
-## 解决方式
-
-**永远用同一个 provider id，只换它指向哪。**
-
-```toml
-model_provider = "main"            # 永远不变（providers.json 里的 providerId）
-
-[model_providers.main]             # 这张表常驻，切换只改这张表的内容
-name = "main"
-wire_api = "responses"
-requires_openai_auth = true        # Codex 始终保留 ChatGPT 登录态
-base_url = "https://…"             # 官方后端 / 某个中继
-experimental_bearer_token = "…"    # 仅中继通道有
-```
-
-- **官方通道**：`base_url = https://chatgpt.com/backend-api/codex`，不带 token
-- **中继通道**：`base_url = <你的中继>`，带 `experimental_bearer_token`
-
-`requires_openai_auth = true` 让 Codex 一直用 `auth.json` 里的 ChatGPT 登录（App 里很多功能依赖登录态），而模型请求带中继 key 发往 `base_url`。这个写法与 [yetone/magpie#994](https://github.com/yetone/magpie/issues/994) 讨论的「绑定 OAuth」一致，本仓库把它做成了一个开箱可用的工具。
-
-因为 provider id 从不变，**Codex 的会话列表自始至终是同一个**：不需要每次切换后补迁移，也不会再有第二个桶。
+![Codex Switcher 的 Magpie 路由界面，使用示例渠道和额度](docs/images/app-window.png)
 
 ## 安装
+
+需要 macOS 13+、Python 3.11+ 和 Xcode Command Line Tools（用于从源码编译窗口）。
 
 ```bash
 git clone https://github.com/Universeeeeeee/Codex-Switcher.git
@@ -115,112 +16,39 @@ cd Codex-Switcher
 ./install.sh
 ```
 
-安装脚本会：把切换脚本装到 `~/.codex-switcher/`、从模板生成 `providers.json`（0600）、编译 `CodexSwitcher.app` 并放到 `/Applications`（无权限时放 `~/Applications`）。
+安装后可以在「应用程序」里打开 Codex Switcher，也可以直接用 `~/.codex-switcher/codex_switch.sh`。预编译版本见 [GitHub Releases](https://github.com/Universeeeeeee/Codex-Switcher/releases)。
 
 ## 配置
 
-编辑 `~/.codex-switcher/providers.json`：
+1. 在 Codex 桌面端登录 ChatGPT 一次。
+2. 编辑 `~/.codex-switcher/providers.json`。官方渠道使用 Codex 登录态。中继渠道按 [配置示例](providers.example.json) 填写 `id`、`baseUrl`、`apiKey` 和 `model`，协议使用 `responses`。
+3. 保持 `providerId` 为 `main`，避免因切换而产生新的会话桶。
 
-```json
-{
-  "providerId": "main",
-  "officialBaseUrl": "https://chatgpt.com/backend-api/codex",
-  "proxy": "http://127.0.0.1:7897",
-  "providers": [
-    { "id": "official", "name": "邮箱登录（官方）", "mode": "chatgpt",
-      "model": "gpt-6-astra", "effort": "high",
-      "authFile": "~/.codex-switcher/auth/official.json" },
-
-    { "id": "relay-a", "name": "中继 A", "mode": "apikey",
-      "model": "gpt-6-astra", "effort": "high",
-      "baseUrl": "https://your-relay.example.com", "wireApi": "responses",
-      "apiKey": "sk-…" }
-  ]
-}
-```
-
-| 字段 | 说明 |
-|---|---|
-| `providerId` | **固定不变的 provider id**，默认 `main`。三个通道共用它 |
-| `officialBaseUrl` | 官方后端地址，一般不用改 |
-| `proxy` | 仅用于**刷新官方登录 token**（无代理可留空） |
-| `mode` | `chatgpt`（用官方登录态）或 `apikey`（用 `apiKey` 直连中继） |
-| `model` / `effort` | 该通道下写入 Codex 的默认模型与推理档位 |
-| `baseUrl` / `wireApi` / `apiKey` | 中继通道的地址（`…/v1` 或裸域名都可以，按你的中继）与 key |
-
-> ⚠️ `providers.json` 含明文 key，权限请保持 `600`，不要提交到 git（仓库的 `.gitignore` 已排除）。
+`providers.json` 含 API Key，请保存在本机。
 
 ## 使用
 
+在 Switcher 窗口点选一个渠道，或使用命令行。
+
 ```bash
-# 命令行
-~/.codex-switcher/codex_switch.sh relay-a              # 切换
-~/.codex-switcher/codex_switch.sh official --restart   # 切换并自动重启 Codex
-~/.codex-switcher/codex_switch.sh relay-a --dry-run    # 只看会改什么，不写入
-~/.codex-switcher/codex_switch.sh magpie --restart     # Magpie：按用户选择的模型来源直连
-~/.codex-switcher/codex_switch.sh magpie-off --restart # 恢复 Magpie 之前的直连配置
-~/.codex-switcher/codex_switch.sh magpie-status       # 查看当前实际渠道和额度
-
-# 或直接打开 App 点按钮
-open /Applications/CodexSwitcher.app
+~/.codex-switcher/codex_switch.sh official --restart
+~/.codex-switcher/codex_switch.sh relay-a --dry-run
 ```
 
-`magpie` 模式要求已安装 Magpie。Switcher 会启动或复用本机 `127.0.0.1:3425` 网关，
-把 `georder` 和 `xfastapi` 同步为 `gpt-6-astra`，创建 `group/codex-astra` 顺序路由，
-并把固定的 `main` Provider 指向网关。Codex 的 `model_provider` 始终保持 `main`，因此不会产生新的会话桶。
-同时生成 `~/.codex-switcher/magpie-models.json`，让 Codex 原生模型列表包含内置模型和各上游模型，并把 `gpt-6-astra` 设为默认模型；内置条目显示为“内置 · …”，避免与实际请求渠道混淆。
-Switcher 会通过 `magpie plugin list --json` 检查并启用 Model Map 插件，合并并备份已有映射，并校验路由成员和顺序；首次启用 Magpie 时即使界面勾选跳过验证，也会发送一次真实请求。当前 Model Map 插件按模型名工作，因此 `gpt-6-astra` 的映射对经过该网关的请求全局生效。
-可用 `MAGPIE_BIN=/path/to/magpie` 指定 Magpie 可执行文件，`MAGPIE_CONFIG_DIR=/path/to/config` 指定 Magpie 配置目录。
+将 `relay-a` 换成你配置中的渠道 ID。`--restart` 会重启 Codex 桌面端，`--dry-run` 可预览配置变更。
 
-首次使用：**先在 Codex 桌面端用官方账号登录一次**，然后随便切一次（脚本会把登录态留存到 `~/.codex-switcher/auth/official.json`），之后三个通道之间就可以随便来回切。
+### Magpie 模式
 
-其它开关：`--no-history`、`--no-verify`（跳过真实验证，秒切）、`--verify-cli`（用 Codex CLI 验证，慢但最接近真实会话）、`--no-ccswitch`、`--legacy-ids`。App 里也可以勾选「跳过真实请求验证」。
+安装 [Magpie](https://github.com/yetone/magpie) 并配置 `georder` 和 `xfastapi` 两个中继后，可以在 Switcher 中选「Magpie 路由」。在 Codex 模型菜单里，带中继名称的条目使用对应渠道。Switcher 的状态区显示最近完成的请求渠道与可查到的额度。
 
-## 它在每次切换时做了什么
-
-```
-1/3 检查 & 备份  解析 config.toml（顺手检测「provider 段缺失」这种坏配置）；
-                 备份 config.toml / auth.json；只有真要迁移历史标签时才额外备份 20MB 的 state 库
-2/3 应用         只写缺的：token 快过期（<1 天）才刷新；config 有差异才写；
-                 历史标签不一致才迁移；cc-switch 已同步就不动
-3/3 验证 & 重启  按 Codex 协议发一条最小真实请求（--no-verify 可跳过；2 分钟内验证过则跳过）；
-                 --restart 时重启 ChatGPT 桌面端（与验证并行，约 2 秒）
+```bash
+~/.codex-switcher/codex_switch.sh magpie --restart
+~/.codex-switcher/codex_switch.sh magpie-status
+~/.codex-switcher/codex_switch.sh magpie-off --restart
 ```
 
-**已经处于目标通道时直接秒退**：不备份、不写文件、不验证、不重启，0.1 秒返回「无需切换」。
+`magpie-off` 恢复启用网关前的配置。直连切换的备份和其他恢复方式见 [排错文档](docs/troubleshooting.md)。
 
-> 为什么不再用 `codex exec` 验证：它会先初始化内置 MCP / 插件目录，实测一次要 30–90 秒（官方后端连 `ps/mcp` 超时 + 重试）。直接发最小请求把验证压到 6–10 秒，而且少一次 CLI 冷启动。想保留原来的验证方式：`--verify-cli`。
+## 许可证
 
-## 实测证据（macOS 26 / codex-cli 0.163.0-alpha.10.2）
-
-| 验证项 | 方法 | 结果 |
-|---|---|---|
-| 中继通道确实走中继，且不动官方账号 | 固定 id + `requires_openai_auth = true` + bearer token，发请求前后查中继自己的用量接口 | `gpt-6-astra` 请求数 **315 → 316**；同期 `~/.codex/auth.json` 始终是 `auth_mode: "chatgpt"` |
-| 官方通道在同一个 id 下可用 | `base_url = https://chatgpt.com/backend-api/codex`、不带 token | 同一个 provider id 下正常，返回 `cached_input_tokens: 5632`（确由官方后端服务） |
-| 切换不再改标签 | 官方 ↔ 中继来回切 | 第二次起提示 **"标签已一致（647 条），无需改写"**，历史始终同一列表 |
-| 配置自修复 | 人为造出 `model_provider = "custom"` 但无该段的坏配置 | 切换后段被写回，Codex 不再报 `Model provider not found` |
-
-## 安全与回滚
-
-- 切换前**必做备份**（config / auth；state 库只在需要迁移历史标签时才备份），保留最近 15 份：`~/.codex-switcher/backups/`。已经处于目标通道时不做任何写入，也不产生备份
-- `--dry-run` 可先看不写；脚本对 `model_provider`、`base_url`、token 都有断言校验
-- 历史标签迁移只改标签字段（`model_provider` / `model_provider_id`），**不动会话内容与模型字段**
-- 想完全退回旧行为：`--legacy-ids`（官方=`openai`、中继=`custom`，但会重新分桶）
-
-## 限制
-
-- **仅 macOS、仅 Codex**。GUI 用 SwiftUI 写的，需要 Xcode Command Line Tools 才能编译
-- **直连模式没有额度路由/故障转移**：上游额度耗尽时脚本会告诉你；启用 Magpie 模式后由 Magpie 负责自动换通道
-- **Magpie 路由模式**：启用 `magpie` 后由 Magpie 负责 `gpt-6-astra` 的顺序故障转移；直连模式的行为保持不变
-- **直连模式不会把中继模型注入 Codex 列表**；Magpie 模式会生成只含 `gpt-6-astra` 的 `model_catalog_json`，模型路由交给 Magpie
-- 官方后端地址 `https://chatgpt.com/backend-api/codex` 是从 CLI 二进制里取出来的，属于未公开接口，Codex 升级后可能变化；快速验证也用这个未公开接口，若某次验证异常，可以先用 `--verify-cli` 交叉确认，或用 `--no-verify` 跳过
-- 个人工具，无维护承诺；Codex 的配置格式变化需要跟（例如 `disable_response_storage` 在新版已被判为 unrecognized，本脚本会自动清理）
-
-## 致谢
-
-- [yetone/magpie#994](https://github.com/yetone/magpie/issues/994) —— 「固定 provider id + 保留 ChatGPT 登录」的讨论与 `requires_openai_auth` 用法的来源
-- [openai/codex](https://github.com/openai/codex) —— `resolve_provider_auth` 的凭据优先级（bearer token 优先于 ChatGPT session）
-
-## License
-
-MIT
+[MIT](LICENSE)
