@@ -27,7 +27,9 @@ macOS · one bash script + a ~250 KB native window · no gateway, no daemon · M
  ✅ 已切换到「邮箱登录（官方）」· 用时 9s
 ```
 
-Switching to the channel that is already active skips everything (backup, writes, verification, relaunch) and returns "nothing to switch" in about 0.1 s.text
+Switching to the channel that is already active skips everything (backup, writes, verification, relaunch) and returns "nothing to switch" in about 0.1 s.
+
+```text
 ▶ 4/9 生成 config.toml
   provider=main | model=gpt-6-astra | effort=high | 中继 https://<your relay> | 保留 ChatGPT 登录
   ✅ config.toml 已更新
