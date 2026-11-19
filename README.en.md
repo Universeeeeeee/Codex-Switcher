@@ -1,6 +1,6 @@
 # Codex Switcher
 
-Switch Codex on macOS between your ChatGPT account and API relays. The default configuration keeps `model_provider = "main"` so your chat history stays in one list.
+Switch Codex on macOS between your ChatGPT account and API relays. The default configuration keeps `model_provider = "main"` so your chat history stays in one list. Keep your ChatGPT account signed in locally to continue using Dot when you switch to a channel with a separate quota.
 
 [中文](README.md) · [Install](#install) · [Usage](#usage) · [Troubleshooting (Chinese)](docs/troubleshooting.md)
 
@@ -40,6 +40,8 @@ Replace `relay-a` with your configured channel ID. Use `--restart` to relaunch C
 ### Magpie mode
 
 Install [Magpie](https://github.com/yetone/magpie) and configure the relays required by Switcher to use Magpie routing. Select a relay by name in the Codex model menu. Switcher shows the channel used by the most recent completed request and any available quota data.
+
+![Codex model picker with Magpie routing enabled](docs/images/magpie-model-picker.png)
 
 ```bash
 ~/.codex-switcher/codex_switch.sh magpie --restart

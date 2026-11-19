@@ -1,6 +1,6 @@
 # Codex Switcher
 
-在 macOS 上一键切换 Codex 的官方账号和 API 中继。默认固定 `model_provider = "main"`，让历史会话留在同一个列表里。
+在 macOS 上一键切换 Codex 的官方账号和 API 中继。默认固定 `model_provider = "main"`，让历史会话留在同一个列表里。 在本机保持邮箱登录 ChatGPT，切换到使用其他额度的渠道后仍可使用 Dot。
 
 [English](README.en.md) · [安装](#安装) · [使用](#使用) · [排错](docs/troubleshooting.md)
 
@@ -40,6 +40,8 @@ cd Codex-Switcher
 ### Magpie 模式
 
 安装 [Magpie](https://github.com/yetone/magpie) 并配置 Switcher 所需的中继后，可以在 Switcher 中选「Magpie 路由」。在 Codex 模型菜单里，带中继名称的条目使用对应渠道。Switcher 的状态区显示最近完成的请求渠道与可查到的额度。
+
+![Magpie 模式下的 Codex 模型选择菜单](docs/images/magpie-model-picker.png)
 
 ```bash
 ~/.codex-switcher/codex_switch.sh magpie --restart
