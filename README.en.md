@@ -39,7 +39,7 @@ Replace `relay-a` with your configured channel ID. Use `--restart` to relaunch C
 
 ### Magpie mode
 
-Install [Magpie](https://github.com/yetone/magpie) and configure the `georder` and `xfastapi` relays to use Magpie routing. Select a relay by name in the Codex model menu. Switcher shows the channel used by the most recent completed request and any available quota data.
+Install [Magpie](https://github.com/yetone/magpie) and configure the relays required by Switcher to use Magpie routing. Select a relay by name in the Codex model menu. Switcher shows the channel used by the most recent completed request and any available quota data.
 
 ```bash
 ~/.codex-switcher/codex_switch.sh magpie --restart
@@ -48,6 +48,11 @@ Install [Magpie](https://github.com/yetone/magpie) and configure the `georder` a
 ```
 
 `magpie-off` restores the configuration used before Magpie mode. See [troubleshooting](docs/troubleshooting.md) for backups and other recovery options.
+
+## Credits
+
+- [yetone/magpie#994](https://github.com/yetone/magpie/issues/994) for the fixed-provider-id / keep-ChatGPT-login discussion
+- [openai/codex](https://github.com/openai/codex) for the credential precedence (bearer token wins over the ChatGPT session)
 
 ## License
 

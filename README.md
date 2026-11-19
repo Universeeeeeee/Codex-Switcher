@@ -39,7 +39,7 @@ cd Codex-Switcher
 
 ### Magpie 模式
 
-安装 [Magpie](https://github.com/yetone/magpie) 并配置 `georder` 和 `xfastapi` 两个中继后，可以在 Switcher 中选「Magpie 路由」。在 Codex 模型菜单里，带中继名称的条目使用对应渠道。Switcher 的状态区显示最近完成的请求渠道与可查到的额度。
+安装 [Magpie](https://github.com/yetone/magpie) 并配置 Switcher 所需的中继后，可以在 Switcher 中选「Magpie 路由」。在 Codex 模型菜单里，带中继名称的条目使用对应渠道。Switcher 的状态区显示最近完成的请求渠道与可查到的额度。
 
 ```bash
 ~/.codex-switcher/codex_switch.sh magpie --restart
@@ -48,6 +48,11 @@ cd Codex-Switcher
 ```
 
 `magpie-off` 恢复启用网关前的配置。直连切换的备份和其他恢复方式见 [排错文档](docs/troubleshooting.md)。
+
+## 致谢
+
+- [yetone/magpie#994](https://github.com/yetone/magpie/issues/994) —— 「固定 provider id + 保留 ChatGPT 登录」的讨论与 `requires_openai_auth` 用法的来源
+- [openai/codex](https://github.com/openai/codex) —— `resolve_provider_auth` 的凭据优先级（bearer token 优先于 ChatGPT session）
 
 ## 许可证
 
